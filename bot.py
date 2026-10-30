@@ -176,18 +176,17 @@ async def cb_remove_exclude(callback: types.CallbackQuery):
     await callback.answer()
 
 
-# Главный надежный обработчик текста
+# Главный обработчик текста с отладкой
 @dp.message(F.text & ~F.text.startswith("/"))
 async def handle_text(message: types.Message):
     if not is_admin(message.from_user.id):
         return
     
-    user_id = message.from_user.id
     text = message.text.strip()
     parts = text.split()
 
     # 1. Если явно нажата кнопка добавления игроков и отправлен список
-    if user_id in WAITING_FOR_PLAYERS:
+    if message.from_user.id in WAITING_FOR_PLAYERS:
         names = []
         for line in text.split("\n"):
             for word in line.split():
@@ -200,20 +199,19 @@ async def handle_text(message: types.Message):
             for name in names:
                 PLAYERS_POOL.add(name)
         
-        WAITING_FOR_PLAYERS.discard(user_id)
+        WAITING_FOR_PLAYERS.discard(message.from_user.id)
         await message.answer("Данные внесены", reply_markup=get_admin_keyboard())
         return
 
-    # 2. Если введено имя и цифра от 1 до 10 (например: "Олег 5")
+    # 2. Оценка скилла (например: "Олег 5")
     if len(parts) >= 2 and parts[-1].isdigit() and 1 <= int(parts[-1]) <= 10:
         skill = int(parts[-1])
         name = " ".join(parts[:-1])
-        
         PLAYER_SKILLS[name] = skill
         await message.answer("Данные внесены", reply_markup=get_admin_keyboard())
         return
 
-    # 3. Если это пара исключений (ровно два слова без цифр)
+    # 3. Пара исключений (ровно два слова без цифр)
     if len(parts) == 2 and not parts[0].isdigit() and not parts[1].isdigit():
         pair = frozenset([parts[0], parts[1]])
         if pair in EXCLUDED_PAIRS:
@@ -224,7 +222,7 @@ async def handle_text(message: types.Message):
             await message.answer("Данные внесены", reply_markup=get_admin_keyboard())
         return
 
-    # 4. Во всех остальных текстовых случаях записываем как список игроков на матч
+    # 4. Обработка списка игроков
     names = []
     for line in text.split("\n"):
         for word in line.split():
@@ -233,10 +231,8 @@ async def handle_text(message: types.Message):
                 names.append(cleaned)
     
     if names:
-        PLAYERS_POOL.clear()
         for name in names:
             PLAYERS_POOL.add(name)
-        
         await message.answer("Данные внесены", reply_markup=get_admin_keyboard())
         return
 
