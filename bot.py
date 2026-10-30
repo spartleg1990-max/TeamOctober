@@ -15,7 +15,7 @@ bot = Bot(token=TOKEN)
 storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
 
-# Абсолютно постоянные хранилища в памяти процесса
+# Хранилище данных в памяти процесса
 PLAYERS_POOL = set()
 PLAYER_SKILLS = {}
 EXCLUDED_PAIRS = set()
@@ -46,11 +46,12 @@ def get_admin_keyboard():
 
 @dp.message(Command("start"))
 @dp.message(Command("admin"))
-async def cmd_start(message: types.Message):
+async def cmd_start(message: types.Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         await message.answer("⚠️ У вас нет прав администратора.")
         return
 
+    await state.clear()
     text = (
         "⚽ **Панель управления футбольными составами**\n\n"
         f"👥 Игроков в базе: **{len(PLAYERS_POOL)}**\n"
@@ -83,15 +84,16 @@ async def process_callbacks(callback: types.CallbackQuery, state: FSMContext):
     if action == "add_players":
         await state.set_state(AdminStates.waiting_for_players)
         await callback.message.answer(
-            "✍️ Отправьте список игроков (имена или юзернеймы через пробел или строчку):\n\n"
+            "✍️ **Отправьте одним сообщением список игроков**\n"
+            "(можно указывать обычные имена и юзернеймы через пробел или с новой строки):\n\n"
             "Пример: `Егор @Rmgild Vladimir @SereginS2`"
         )
 
     elif action == "set_skills":
         await state.set_state(AdminStates.waiting_for_skills)
         await callback.message.answer(
-            "⭐ Отправьте оценку игрока в формате:\n`Имя число` (от 1 до 10)\n\n"
-            "Пример: `Егор 9`"
+            "⭐ Отправьте оценку игрока в формате:\n`Имя_или_юзернейм число` (от 1 до 10)\n\n"
+            "Пример: `Егор 8` или `@Rmgild 9`"
         )
 
     elif action == "add_exclude":
@@ -104,18 +106,20 @@ async def process_callbacks(callback: types.CallbackQuery, state: FSMContext):
     elif action == "remove_exclude":
         await state.set_state(AdminStates.waiting_for_remove_pair)
         await callback.message.answer(
-            "❌ Отправьте пару исключения, которую нужно удалить:\n\n"
+            "❌ Отправьте двух игроков через пробел для удаления пары исключения:\n\n"
             "Пример: `Егор Vladimir`"
         )
 
     elif action == "clear_list":
         PLAYERS_POOL.clear()
+        await state.clear()
         await callback.message.answer(
             "🗑 Список игроков очищен! (Скиллы и пары исключений сохранены)."
         )
         await callback.message.answer("Главное меню:", reply_markup=get_admin_keyboard())
 
     elif action == "make_teams":
+        await state.clear()
         if len(PLAYERS_POOL) < 2:
             await callback.answer(
                 f"⚠️ Недостаточно игроков для сборки (сейчас в базе: {len(PLAYERS_POOL)}, нужно минимум 2).",
@@ -189,37 +193,46 @@ def parse_tokens(text: str) -> set:
     return {word.strip(",.;:!?") for word in text.split() if word.strip(",.;:!?")}
 
 
+# Перехватчик ввода списка игроков ПОСЛЕ нажатия "Добавить игрока"
 @dp.message(AdminStates.waiting_for_players)
 async def save_players(message: types.Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+
     tokens = parse_tokens(message.text)
     if not tokens:
-        await message.answer("⚠️ Список пустой. Отправьте имена игроков:")
+        await message.answer("⚠️ Не удалось распознать имена. Отправьте список игроков еще раз:")
         return
 
     for t in tokens:
         PLAYERS_POOL.add(t)
 
     await state.clear()
+    
+    added_list_str = ", ".join(sorted(tokens))
     await message.answer(
-        f"✅ Успешно добавлено игроков: {len(tokens)}.\n"
+        f"✅ **Игроки успешно добавлены!**\n\n"
+        f"Добавлены в этом шаге: {added_list_str}\n"
         f"👥 Всего игроков в базе: **{len(PLAYERS_POOL)}**",
         reply_markup=get_admin_keyboard(),
         parse_mode="Markdown",
     )
 
 
+# Обработчик ввода скиллов
 @dp.message(AdminStates.waiting_for_skills)
 async def save_skill(message: types.Message, state: FSMContext):
-    if not message.text:
+    if not is_admin(message.from_user.id) or not message.text:
         return
+
     parts = message.text.strip().split()
     if len(parts) < 2:
-        await message.answer("⚠️ Неверный формат. Пример: `Егор 8`")
+        await message.answer("⚠️ Неверный формат. Пример: `Егор 8` или `@Rmgild 9`")
         return
 
     skill_str = parts[-1]
     if not skill_str.isdigit() or not (1 <= int(skill_str) <= 10):
-        await message.answer("⚠️ Последним словом должна быть цифра от 1 до 10!")
+        await message.answer("⚠️ Последним элементом должна быть цифра от 1 до 10!")
         return
 
     skill = int(skill_str)
@@ -230,14 +243,18 @@ async def save_skill(message: types.Message, state: FSMContext):
 
     await state.clear()
     await message.answer(
-        f"⭐ Скилл игрока {player_name} установлен на **{skill}**!",
+        f"⭐ Скилл игрока **{player_name}** установлен на **{skill}**!",
         reply_markup=get_admin_keyboard(),
         parse_mode="Markdown",
     )
 
 
+# Обработчик добавления пары исключений
 @dp.message(AdminStates.waiting_for_exclude_pair)
 async def save_exclude(message: types.Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+
     tokens = list(parse_tokens(message.text))
     if len(tokens) < 2:
         await message.answer("⚠️ Укажите ровно двух игроков через пробел:")
@@ -254,8 +271,12 @@ async def save_exclude(message: types.Message, state: FSMContext):
     )
 
 
+# Обработчик удаления пары исключений
 @dp.message(AdminStates.waiting_for_remove_pair)
 async def remove_exclude(message: types.Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+
     tokens = list(parse_tokens(message.text))
     if len(tokens) < 2:
         await message.answer("⚠️ Укажите ровно двух игроков для удаления пары:")
