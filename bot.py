@@ -66,8 +66,7 @@ async def cb_skills(callback: types.CallbackQuery):
     if not is_admin(callback.from_user.id):
         return
     WAITING_FOR_PLAYERS.discard(callback.from_user.id)
-    # Сценарий по твоему запросу:
-    await callback.message.answer("Для оценки скилла введите имя и цифру от 1 до 10")
+    await callback.message.answer("Для оценки скилла введите имя и цифру от 1 до 10 (например: Олег 5)")
     await callback.answer()
 
 
@@ -177,7 +176,7 @@ async def cb_remove_exclude(callback: types.CallbackQuery):
     await callback.answer()
 
 
-# Главный обработчик текста
+# Главный надежный обработчик текста
 @dp.message(F.text & ~F.text.startswith("/"))
 async def handle_text(message: types.Message):
     if not is_admin(message.from_user.id):
@@ -187,7 +186,7 @@ async def handle_text(message: types.Message):
     text = message.text.strip()
     parts = text.split()
 
-    # 1. Если ждем список игроков на матч
+    # 1. Если явно нажата кнопка добавления игроков и отправлен список
     if user_id in WAITING_FOR_PLAYERS:
         names = []
         for line in text.split("\n"):
@@ -205,19 +204,17 @@ async def handle_text(message: types.Message):
         await message.answer("Данные внесены", reply_markup=get_admin_keyboard())
         return
 
-    # 2. Если введено имя и цифра от 1 до 10 (например: "Олег 5") — срабатывает всегда!
+    # 2. Если введено имя и цифра от 1 до 10 (например: "Олег 5")
     if len(parts) >= 2 and parts[-1].isdigit() and 1 <= int(parts[-1]) <= 10:
         skill = int(parts[-1])
         name = " ".join(parts[:-1])
         
         PLAYER_SKILLS[name] = skill
-        
-        # Ответ строго по твоему сценарию:
         await message.answer("Данные внесены", reply_markup=get_admin_keyboard())
         return
 
-    # 3. Обработка пар исключений (ровно 2 слова)
-    if len(parts) == 2:
+    # 3. Если это пара исключений (ровно два слова без цифр)
+    if len(parts) == 2 and not parts[0].isdigit() and not parts[1].isdigit():
         pair = frozenset([parts[0], parts[1]])
         if pair in EXCLUDED_PAIRS:
             EXCLUDED_PAIRS.remove(pair)
@@ -227,7 +224,23 @@ async def handle_text(message: types.Message):
             await message.answer("Данные внесены", reply_markup=get_admin_keyboard())
         return
 
-    await message.answer("⚠️ Воспользуйтесь кнопками меню. Чтобы вызвать меню заново, отправьте /admin", reply_markup=get_admin_keyboard())
+    # 4. Во всех остальных текстовых случаях записываем как список игроков на матч
+    names = []
+    for line in text.split("\n"):
+        for word in line.split():
+            cleaned = word.strip(",.;:!?")
+            if cleaned:
+                names.append(cleaned)
+    
+    if names:
+        PLAYERS_POOL.clear()
+        for name in names:
+            PLAYERS_POOL.add(name)
+        
+        await message.answer("Данные внесены", reply_markup=get_admin_keyboard())
+        return
+
+    await message.answer("⚠️ Не удалось распознать формат. Отправьте «Имя Цифра» (например: Олег 5) или список игроков.", reply_markup=get_admin_keyboard())
 
 
 if __name__ == "__main__":
