@@ -11,18 +11,10 @@ logging.basicConfig(level=logging.INFO)
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# Базы данных
 PLAYERS_POOL = set()
 PLAYER_SKILLS = {}
 EXCLUDED_PAIRS = set()
-
-# Словари для отслеживания состояния каждого пользователя
 USER_STATES = {}
-# Возможные состояния:
-# "WAITING_PLAYERS" - ждем список игроков
-# "WAITING_SKILL" - ждем оценку скилла
-# "WAITING_EXCLUDE" - ждем пару исключения
-# "WAITING_REMOVE_EXCLUDE" - ждем удаление пары
 
 
 def is_admin(user_id: int) -> bool:
@@ -47,7 +39,7 @@ def get_admin_keyboard():
 async def cmd_start(message: types.Message):
     if not is_admin(message.from_user.id):
         return
-    USER_STATES.pop(message.from_user.id, None)  # Сбрасываем состояние
+    USER_STATES.pop(message.from_user.id, None)
     
     text = (
         "⚽ **Панель управления футбольными составами**\n\n"
@@ -58,8 +50,6 @@ async def cmd_start(message: types.Message):
     )
     await message.answer(text, reply_markup=get_admin_keyboard(), parse_mode="Markdown")
 
-
-# --- КНОПКИ МЕНЮ (Устанавливают состояние ожидания) ---
 
 @dp.callback_query(F.data == "add_players")
 async def cb_add_players(callback: types.CallbackQuery):
@@ -84,7 +74,7 @@ async def cb_exclude(callback: types.CallbackQuery):
     if not is_admin(callback.from_user.id):
         return
     USER_STATES[callback.from_user.id] = "WAITING_EXCLUDE"
-    await callback.message.answer("🚫 Отправьте двух игроков через пробел, которые не должны играть вместе:")
+    await callback.message.answer("🚫 Отправьте двух игроков через пробел, которые не должны играть вместе (например: Олег Макс):")
     await callback.answer()
 
 
@@ -133,53 +123,76 @@ async def cb_make_teams(callback: types.CallbackQuery):
         return
 
     players = list(PLAYERS_POOL)
-    random.shuffle(players)
-
+    
     def get_skill(p):
         return PLAYER_SKILLS.get(p, 5)
 
-    players.sort(key=get_skill, reverse=True)
-    team1, team2 = [], []
-    sum1, sum2 = 0, 0
+    # Функция проверки: нарушает ли пара правила исключения в команде
+    def check_excludes(team):
+        for i in range(len(team)):
+            for j in range(i + 1, len(team)):
+                if frozenset([team[i], team[j]]) in EXCLUDED_PAIRS:
+                    return False
+        return True
 
-    for player in players:
-        p_skill = get_skill(player)
-        can_go_1 = all(frozenset([player, p]) not in EXCLUDED_PAIRS for p in team1)
-        can_go_2 = all(frozenset([player, p]) not in EXCLUDED_PAIRS for p in team2)
+    # Пытаемся найти честное распределение без перекосов (максимум 100 попыток с рандомом)
+    best_team1, best_team2 = [], []
+    best_diff = 999
+    
+    total_players = len(players)
+    max_team_size = (total_players + 1) // 2
 
-        if len(team1) <= len(team2) and can_go_1 and (sum1 <= sum2 or not can_go_2):
-            team1.append(player)
-            sum1 += p_skill
-        elif can_go_2:
-            team2.append(player)
-            sum2 += p_skill
-        elif can_go_1:
-            team1.append(player)
-            sum1 += p_skill
-        else:
-            if len(team1) <= len(team2):
-                team1.append(player)
-                sum1 += p_skill
+    for _ in range(200):
+        random.shuffle(players)
+        t1 = []
+        t2 = []
+        
+        # Сортируем по скиллу для баланса
+        sorted_pl = sorted(players, key=get_skill, reverse=True)
+        
+        s1, s2 = 0, 0
+        for p in sorted_pl:
+            # Строго следим за равным размером команд (разница не больше 1 игрока)
+            if len(t1) < max_team_size and (len(t1) <= len(t2) and s1 <= s2 or len(t2) >= max_team_size):
+                t1.append(p)
+                s1 += get_skill(p)
             else:
-                team2.append(player)
-                sum2 += p_skill
+                t2.append(p)
+                s2 += get_skill(p)
+                
+        # Если в обеих командах нет запрещенных пар и размеры честные
+        if check_excludes(t1) and check_excludes(t2) and abs(len(t1) - len(t2)) <= 1:
+            diff = abs(s1 - s2)
+            if diff < best_diff:
+                best_diff = diff
+                best_team1, best_team2 = t1, t2
+                if diff == 0:
+                    break
 
-    avg1 = round(sum1 / len(team1), 1) if team1 else 0
-    avg2 = round(sum2 / len(team2), 1) if team2 else 0
+    # Если идеальный вариант не нашелся, берем хоть какой-то валидный по размерам
+    if not best_team1:
+        best_team1 = players[:max_team_size]
+        best_team2 = players[max_team_size:]
 
+    sum1 = sum(get_skill(p) for p in best_team1)
+    sum2 = sum(get_skill(p) for p in best_team2)
+    avg1 = round(sum1 / len(best_team1), 1) if best_team1 else 0
+    avg2 = round(sum2 / len(best_team2), 1) if best_team2 else 0
+
+    # Формируем текст с нумерацией напротив имен
     text = "🔀 **Сбалансированные составы команд:**\n\n"
+    
     text += f"**Команда 1** (Средний скилл: {avg1}):\n"
-    for p in team1:
-        text += f"• {p} (скилл: {get_skill(p)})\n"
+    for idx, p in enumerate(best_team1, 1):
+        text += f"{idx}. {p} (скилл: {get_skill(p)})\n"
+        
     text += f"\n**Команда 2** (Средний скилл: {avg2}):\n"
-    for p in team2:
-        text += f"• {p} (скилл: {get_skill(p)})\n"
+    for idx, p in enumerate(best_team2, 1):
+        text += f"{idx}. {p} (скилл: {get_skill(p)})\n"
 
     await callback.message.answer(text, parse_mode="Markdown", reply_markup=get_admin_keyboard())
     await callback.answer()
 
-
-# --- ОБРАБОТЧИК ТЕКСТА (СРАБАТЫВАЕТ ТОЛЬКО ПО СОСТОЯНИЮ) ---
 
 @dp.message(F.text & ~F.text.startswith("/"))
 async def handle_text(message: types.Message):
@@ -189,14 +202,12 @@ async def handle_text(message: types.Message):
     user_id = message.from_user.id
     current_state = USER_STATES.get(user_id)
 
-    # Если пользователь НЕ нажимал кнопку запроса — полностью игнорируем текст (обычный чат)
     if not current_state:
         return
 
     text = message.text.strip()
     parts = text.split()
 
-    # 1. Обработка списка игроков после кнопки «Добавить игроков»
     if current_state == "WAITING_PLAYERS":
         names = []
         for line in text.split("\n"):
@@ -209,11 +220,10 @@ async def handle_text(message: types.Message):
             for name in names:
                 PLAYERS_POOL.add(name)
         
-        USER_STATES.pop(user_id, None)  # Сбрасываем состояние
+        USER_STATES.pop(user_id, None)
         await message.answer(f"✅ Добавлено! Всего игроков в базе: {len(PLAYERS_POOL)}", reply_markup=get_admin_keyboard())
         return
 
-    # 2. Обработка скилла после кнопки «Оценить скилл»
     if current_state == "WAITING_SKILL":
         if len(parts) >= 2 and parts[-1].isdigit() and 1 <= int(parts[-1]) <= 10:
             skill = int(parts[-1])
@@ -225,7 +235,6 @@ async def handle_text(message: types.Message):
             await message.answer("⚠️ Неверный формат. Введите имя и цифру от 1 до 10 (например: Олег 5):")
         return
 
-    # 3. Добавление пары исключения
     if current_state == "WAITING_EXCLUDE":
         if len(parts) == 2 and not parts[0].isdigit() and not parts[1].isdigit():
             pair = frozenset([parts[0], parts[1]])
@@ -236,7 +245,6 @@ async def handle_text(message: types.Message):
             await message.answer("⚠️ Введите ровно два имени через пробел:")
         return
 
-    # 4. Удаление пары исключения
     if current_state == "WAITING_REMOVE_EXCLUDE":
         if len(parts) == 2 and not parts[0].isdigit() and not parts[1].isdigit():
             pair = frozenset([parts[0], parts[1]])
