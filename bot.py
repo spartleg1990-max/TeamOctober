@@ -19,7 +19,6 @@ dp = Dispatcher(storage=storage)
 
 DB_FILE = "database.json"
 
-# Функции для работы с постоянным файлом на диске
 def load_data():
     try:
         with open(DB_FILE, "r", encoding="utf-8") as f:
@@ -41,7 +40,6 @@ def save_data():
     with open(DB_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
 
-# Инициализация баз данных из файла
 players_pool, player_skills, excluded_pairs = load_data()
 
 
@@ -107,29 +105,29 @@ async def process_callbacks(callback: types.CallbackQuery, state: FSMContext):
     if action == "add_players":
         await state.set_state(AdminStates.waiting_for_players)
         await callback.message.answer(
-            "✍️ Отправьте списком игроков (можно выбирать через `@` из выпадающего списка):\n\n"
-            "Пример: `@user1 @user2`"
+            "✍️ Отправьте список игроков (имена или юзернеймы через пробел/строку):\n\n"
+            "Пример: `Егор @Rmgild Vladimir @SereginS2`"
         )
 
     elif action == "set_skills":
         await state.set_state(AdminStates.waiting_for_skills)
         await callback.message.answer(
-            "⭐ Отправьте оценку игрока в формате:\n`@username число` (от 1 до 10)\n\n"
-            "Пример: `@user1 9`"
+            "⭐ Отправьте оценку игрока в формате:\n`Имя_или_юзернейм число` (от 1 до 10)\n\n"
+            "Пример: `Егор 9` или `@Rmgild 10`"
         )
 
     elif action == "add_exclude":
         await state.set_state(AdminStates.waiting_for_exclude_pair)
         await callback.message.answer(
-            "🚫 Отправьте двух игроков через `@`, которые **не должны** играть в одной команде:\n\n"
-            "Пример: `@user1 @user2`"
+            "🚫 Отправьте двух игроков через пробел, которые **не должны** играть в одной команде:\n\n"
+            "Пример: `Егор Vladimir`"
         )
 
     elif action == "remove_exclude":
         await state.set_state(AdminStates.waiting_for_remove_pair)
         await callback.message.answer(
             "❌ Отправьте пару исключения, которую нужно удалить:\n\n"
-            "Пример: `@user1 @user2`"
+            "Пример: `Егор Vladimir`"
         )
 
     elif action == "clear_list":
@@ -208,43 +206,35 @@ async def process_callbacks(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-def extract_usernames(message: types.Message) -> set:
+# Универсальная функция извлечения всех слов/токенов из текста
+def extract_players_list(text: str) -> set:
+    if not text:
+        return set()
+    tokens = text.split()
     found = set()
-    if message.text:
-        matches = re.findall(r"@[\w_]+", message.text)
-        for m in matches:
-            found.add(m)
-    if message.entities:
-        for entity in message.entities:
-            if entity.type == "text_mention" and entity.user:
-                if entity.user.username:
-                    found.add(f"@{entity.user.username}")
-                else:
-                    found.add(f"@{entity.user.first_name}")
-            elif entity.type == "mention" and message.text:
-                mention_text = message.text[entity.offset:entity.offset + entity.length]
-                found.add(mention_text)
+    for token in tokens:
+        cleaned = token.strip(",.;:!?")
+        if cleaned:
+            found.add(cleaned)
     return found
 
 
 @dp.message(AdminStates.waiting_for_players)
 async def save_players(message: types.Message, state: FSMContext):
-    usernames = extract_usernames(message)
+    players = extract_players_list(message.text)
     
-    if not usernames:
-        await message.answer(
-            "⚠️ Не удалось распознать игроков. Убедитесь, что используете `@` или выбираете из списка:"
-        )
+    if not players:
+        await message.answer("⚠️ Список пустой. Отправьте имена или юзернеймы игроков:")
         return
 
-    for u in usernames:
-        players_pool.add(u)
+    for p in players:
+        players_pool.add(p)
     
-    save_data()  # Сохраняем на диск
+    save_data()
 
     await state.clear()
     await message.answer(
-        f"✅ Успешно добавлено/обновлено игроков: {len(usernames)}.\n"
+        f"✅ Успешно добавлено игроков: {len(players)}.\n"
         f"👥 Всего игроков в базе: **{len(players_pool)}**",
         reply_markup=get_admin_keyboard(),
         parse_mode="Markdown",
@@ -253,25 +243,28 @@ async def save_players(message: types.Message, state: FSMContext):
 
 @dp.message(AdminStates.waiting_for_skills)
 async def save_skill(message: types.Message, state: FSMContext):
-    usernames = list(extract_usernames(message))
-    match = re.search(r"\b([1-9]|10)\b", message.text)
-    
-    if not usernames or not match:
-        await message.answer(
-            "⚠️ Неверный формат. Укажите игрока через `@` и оценку от 1 до 10 через пробел, например: `@user1 8`"
-        )
+    if not message.text:
+        return
+    parts = message.text.strip().split()
+    if len(parts) < 2:
+        await message.answer("⚠️ Неверный формат. Укажите игрока и оценку от 1 до 10 через пробел, например: `Егор 8`")
         return
 
-    username = usernames[0]
-    skill = int(match.group(0))
+    skill_str = parts[-1]
+    if not skill_str.isdigit() or not (1 <= int(skill_str) <= 10):
+        await message.answer("⚠️ Последним элементом должна быть оценка от 1 до 10!")
+        return
 
-    player_skills[username] = skill
-    players_pool.add(username)
-    save_data()  # Сохраняем на диск
+    skill = int(skill_str)
+    player_name = " ".join(parts[:-1])
+
+    player_skills[player_name] = skill
+    players_pool.add(player_name)
+    save_data()
 
     await state.clear()
     await message.answer(
-        f"⭐ Скилл игрока {username} установлен на **{skill}** и сохранен навсегда!",
+        f"⭐ Скилл игрока {player_name} установлен на **{skill}** и сохранен навсегда!",
         reply_markup=get_admin_keyboard(),
         parse_mode="Markdown",
     )
@@ -279,18 +272,18 @@ async def save_skill(message: types.Message, state: FSMContext):
 
 @dp.message(AdminStates.waiting_for_exclude_pair)
 async def save_exclude(message: types.Message, state: FSMContext):
-    usernames = list(extract_usernames(message))
-    if len(usernames) < 2:
-        await message.answer("⚠️ Нужно указать ровно двух игроков через `@`. Попробуйте снова:")
+    players = list(extract_players_list(message.text))
+    if len(players) < 2:
+        await message.answer("⚠️ Нужно указать ровно двух игроков через пробел. Попробуйте снова:")
         return
 
-    pair = frozenset([usernames[0], usernames[1]])
+    pair = frozenset([players[0], players[1]])
     excluded_pairs.add(pair)
-    save_data()  # Сохраняем на диск
+    save_data()
 
     await state.clear()
     await message.answer(
-        f"🚫 Пара исключений добавлена: **{usernames[0]}** и **{usernames[1]}** не сыграют вместе.",
+        f"🚫 Пара исключений добавлена: **{players[0]}** и **{players[1]}** не сыграют вместе.",
         reply_markup=get_admin_keyboard(),
         parse_mode="Markdown",
     )
@@ -298,16 +291,16 @@ async def save_exclude(message: types.Message, state: FSMContext):
 
 @dp.message(AdminStates.waiting_for_remove_pair)
 async def remove_exclude(message: types.Message, state: FSMContext):
-    usernames = list(extract_usernames(message))
-    if len(usernames) < 2:
-        await message.answer("⚠️ Нужно указать ровно двух игроков через `@` для удаления пары:")
+    players = list(extract_players_list(message.text))
+    if len(players) < 2:
+        await message.answer("⚠️ Нужно указать ровно двух игроков для удаления пары:")
         return
 
-    pair = frozenset([usernames[0], usernames[1]])
+    pair = frozenset([players[0], players[1]])
     if pair in excluded_pairs:
         excluded_pairs.remove(pair)
-        save_data()  # Сохраняем на диск
-        text = f"✅ Пара исключений **{usernames[0]}** и **{usernames[1]}** успешно удалена."
+        save_data()
+        text = f"✅ Пара исключений **{players[0]}** и **{players[1]}** успешно удалена."
     else:
         text = "⚠️ Такая пара исключений не найдена в списке."
 
