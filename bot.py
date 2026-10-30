@@ -1,3 +1,4 @@
+import json
 import logging
 import random
 import re
@@ -16,10 +17,32 @@ bot = Bot(token=TOKEN)
 storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
 
-# Постоянные данные
-players_pool = set()
-player_skills = {}
-excluded_pairs = set()
+DB_FILE = "database.json"
+
+# Функции для работы с постоянным файлом на диске
+def load_data():
+    try:
+        with open(DB_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return (
+                set(data.get("players", [])),
+                data.get("skills", {}),
+                {frozenset(pair) for pair in data.get("exclude_pairs", [])},
+            )
+    except (FileNotFoundError, json.JSONDecodeError):
+        return set(), {}, set()
+
+def save_data():
+    data = {
+        "players": list(players_pool),
+        "skills": player_skills,
+        "exclude_pairs": [list(pair) for pair in excluded_pairs],
+    }
+    with open(DB_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
+
+# Инициализация баз данных из файла
+players_pool, player_skills, excluded_pairs = load_data()
 
 
 class AdminStates(StatesGroup):
@@ -111,6 +134,7 @@ async def process_callbacks(callback: types.CallbackQuery, state: FSMContext):
 
     elif action == "clear_list":
         players_pool.clear()
+        save_data()
         await callback.message.answer(
             "🗑 Список игроков очищен! (Скиллы и пары исключений сохранены)."
         )
@@ -184,30 +208,22 @@ async def process_callbacks(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-# Универсальная функция извлечения юзернеймов (и из текста, и из скрытых тегов упоминаний из выпадающего списка)
 def extract_usernames(message: types.Message) -> set:
     found = set()
-    
-    # 1. Ищем обычные текстовые упоминания @username
     if message.text:
         matches = re.findall(r"@[\w_]+", message.text)
         for m in matches:
             found.add(m)
-            
-    # 2. Ищем скрытые сущности (когда юзер выбирается из выпадающего списка Telegram)
     if message.entities:
         for entity in message.entities:
             if entity.type == "text_mention" and entity.user:
                 if entity.user.username:
                     found.add(f"@{entity.user.username}")
                 else:
-                    # Если у пользователя нет юзернейма, берем его имя
                     found.add(f"@{entity.user.first_name}")
             elif entity.type == "mention" and message.text:
-                # Вырезаем кусок текста по координатам сущности
                 mention_text = message.text[entity.offset:entity.offset + entity.length]
                 found.add(mention_text)
-                
     return found
 
 
@@ -223,6 +239,8 @@ async def save_players(message: types.Message, state: FSMContext):
 
     for u in usernames:
         players_pool.add(u)
+    
+    save_data()  # Сохраняем на диск
 
     await state.clear()
     await message.answer(
@@ -249,6 +267,7 @@ async def save_skill(message: types.Message, state: FSMContext):
 
     player_skills[username] = skill
     players_pool.add(username)
+    save_data()  # Сохраняем на диск
 
     await state.clear()
     await message.answer(
@@ -267,6 +286,7 @@ async def save_exclude(message: types.Message, state: FSMContext):
 
     pair = frozenset([usernames[0], usernames[1]])
     excluded_pairs.add(pair)
+    save_data()  # Сохраняем на диск
 
     await state.clear()
     await message.answer(
@@ -286,6 +306,7 @@ async def remove_exclude(message: types.Message, state: FSMContext):
     pair = frozenset([usernames[0], usernames[1]])
     if pair in excluded_pairs:
         excluded_pairs.remove(pair)
+        save_data()  # Сохраняем на диск
         text = f"✅ Пара исключений **{usernames[0]}** и **{usernames[1]}** успешно удалена."
     else:
         text = "⚠️ Такая пара исключений не найдена в списке."
