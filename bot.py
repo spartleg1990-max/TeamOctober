@@ -1,5 +1,7 @@
 import logging
 import random
+import json
+import os
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
@@ -11,10 +13,42 @@ logging.basicConfig(level=logging.INFO)
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
+DATA_FILE = "bot_database.json"
+
+# Базы данных
 PLAYERS_POOL = set()
 PLAYER_SKILLS = {}
 EXCLUDED_PAIRS = set()
 USER_STATES = {}
+
+
+def load_data():
+    """Загрузка данных из файла, чтобы они не пропадали при перезапуске"""
+    global PLAYERS_POOL, PLAYER_SKILLS, EXCLUDED_PAIRS
+    if os.path.exists(DATA_FILE):
+        try:
+            with open(DATA_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                PLAYERS_POOL = set(data.get("players", []))
+                PLAYER_SKILLS = data.get("skills", {})
+                # Преобразуем списки обратно в frozenset для пар исключений
+                EXCLUDED_PAIRS = {frozenset(pair) for pair in data.get("excludes", [])}
+        except Exception as e:
+            logging.error(f"Ошибка загрузки данных: {e}")
+
+
+def save_data():
+    """Сохранение данных в файл"""
+    try:
+        data = {
+            "players": list(PLAYERS_POOL),
+            "skills": PLAYER_SKILLS,
+            "excludes": [list(pair) for pair in EXCLUDED_PAIRS]
+        }
+        with open(DATA_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=4)
+    except Exception as e:
+        logging.error(f"Ошибка сохранения данных: {e}")
 
 
 def is_admin(user_id: int) -> bool:
@@ -108,6 +142,7 @@ async def cb_clear(callback: types.CallbackQuery):
         return
     USER_STATES.pop(callback.from_user.id, None)
     PLAYERS_POOL.clear()
+    save_data()
     await callback.message.answer("🗑 Список игроков на матч очищен.", reply_markup=get_admin_keyboard())
     await callback.answer()
 
@@ -127,7 +162,6 @@ async def cb_make_teams(callback: types.CallbackQuery):
     def get_skill(p):
         return PLAYER_SKILLS.get(p, 5)
 
-    # Функция проверки: нарушает ли пара правила исключения в команде
     def check_excludes(team):
         for i in range(len(team)):
             for j in range(i + 1, len(team)):
@@ -135,24 +169,18 @@ async def cb_make_teams(callback: types.CallbackQuery):
                     return False
         return True
 
-    # Пытаемся найти честное распределение без перекосов (максимум 100 попыток с рандомом)
     best_team1, best_team2 = [], []
     best_diff = 999
-    
     total_players = len(players)
     max_team_size = (total_players + 1) // 2
 
     for _ in range(200):
         random.shuffle(players)
-        t1 = []
-        t2 = []
-        
-        # Сортируем по скиллу для баланса
+        t1, t2 = [], []
         sorted_pl = sorted(players, key=get_skill, reverse=True)
-        
         s1, s2 = 0, 0
+        
         for p in sorted_pl:
-            # Строго следим за равным размером команд (разница не больше 1 игрока)
             if len(t1) < max_team_size and (len(t1) <= len(t2) and s1 <= s2 or len(t2) >= max_team_size):
                 t1.append(p)
                 s1 += get_skill(p)
@@ -160,7 +188,6 @@ async def cb_make_teams(callback: types.CallbackQuery):
                 t2.append(p)
                 s2 += get_skill(p)
                 
-        # Если в обеих командах нет запрещенных пар и размеры честные
         if check_excludes(t1) and check_excludes(t2) and abs(len(t1) - len(t2)) <= 1:
             diff = abs(s1 - s2)
             if diff < best_diff:
@@ -169,7 +196,6 @@ async def cb_make_teams(callback: types.CallbackQuery):
                 if diff == 0:
                     break
 
-    # Если идеальный вариант не нашелся, берем хоть какой-то валидный по размерам
     if not best_team1:
         best_team1 = players[:max_team_size]
         best_team2 = players[max_team_size:]
@@ -179,7 +205,7 @@ async def cb_make_teams(callback: types.CallbackQuery):
     avg1 = round(sum1 / len(best_team1), 1) if best_team1 else 0
     avg2 = round(sum2 / len(best_team2), 1) if best_team2 else 0
 
-    # Формируем текст с нумерацией напротив имен
+    # Вывод с четкой нумерацией напротив каждого имени
     text = "🔀 **Сбалансированные составы команд:**\n\n"
     
     text += f"**Команда 1** (Средний скилл: {avg1}):\n"
@@ -219,6 +245,7 @@ async def handle_text(message: types.Message):
         if names:
             for name in names:
                 PLAYERS_POOL.add(name)
+            save_data()
         
         USER_STATES.pop(user_id, None)
         await message.answer(f"✅ Добавлено! Всего игроков в базе: {len(PLAYERS_POOL)}", reply_markup=get_admin_keyboard())
@@ -229,6 +256,7 @@ async def handle_text(message: types.Message):
             skill = int(parts[-1])
             name = " ".join(parts[:-1])
             PLAYER_SKILLS[name] = skill
+            save_data()
             USER_STATES.pop(user_id, None)
             await message.answer(f"⭐ Сохранено: {name} — {skill}", reply_markup=get_admin_keyboard())
         else:
@@ -239,6 +267,7 @@ async def handle_text(message: types.Message):
         if len(parts) == 2 and not parts[0].isdigit() and not parts[1].isdigit():
             pair = frozenset([parts[0], parts[1]])
             EXCLUDED_PAIRS.add(pair)
+            save_data()
             USER_STATES.pop(user_id, None)
             await message.answer(f"🚫 Пара исключения добавлена: {parts[0]} и {parts[1]}", reply_markup=get_admin_keyboard())
         else:
@@ -250,6 +279,7 @@ async def handle_text(message: types.Message):
             pair = frozenset([parts[0], parts[1]])
             if pair in EXCLUDED_PAIRS:
                 EXCLUDED_PAIRS.remove(pair)
+                save_data()
                 await message.answer(f"✅ Пара исключения удалена: {parts[0]} и {parts[1]}", reply_markup=get_admin_keyboard())
             else:
                 await message.answer("⚠️ Такая пара не найдена в списке.")
@@ -261,4 +291,5 @@ async def handle_text(message: types.Message):
 
 if __name__ == "__main__":
     import asyncio
+    load_data()  # Загружаем сохраненную базу при старте
     asyncio.run(dp.start_polling(bot))
