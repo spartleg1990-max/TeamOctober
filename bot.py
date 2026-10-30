@@ -29,9 +29,11 @@ def load_data():
                 PLAYERS_POOL = set(data.get("players", []))
                 PLAYER_SKILLS = data.get("skills", {})
                 EXCLUDED_PAIRS = {frozenset(p) for p in data.get("excludes", [])}
+                logging.info("✅ Данные успешно загружены с GitHub!")
                 return
-        except Exception:
-            pass
+        except Exception as e:
+            logging.warning(f"⚠️ Не удалось загрузить с GitHub: {e}")
+            
     if os.path.exists(DATA_FILE):
         try:
             with open(DATA_FILE, "r", encoding="utf-8") as f:
@@ -48,25 +50,33 @@ def save_data():
     try:
         with open(DATA_FILE, "w", encoding="utf-8") as f:
             f.write(json_str)
-    except Exception:
-        pass
+    except Exception as e:
+        logging.error(f"❌ Ошибка локального сохранения: {e}")
+        
     if GH_TOKEN and GH_REPO:
-        try:
-            url = f"https://api.github.com/repos/{GH_REPO}/contents/{DATA_FILE}"
-            content_encoded = base64.b64encode(json_str.encode()).decode()
-            sha = None
-            req_get = urllib.request.Request(url, headers={"Authorization": f"token {GH_TOKEN}", "Accept": "application/vnd.github.v3+json", "User-Agent": "Bot"})
+        url = f"https://api.github.com/repos/{GH_REPO}/contents/{DATA_FILE}"
+        content_encoded = base64.b64encode(json_str.encode()).decode()
+        
+        # Делаем попытку с авто-обновлением sha на случай конфликтов при быстрой правке
+        for attempt in range(2):
             try:
-                with urllib.request.urlopen(req_get) as resp:
-                    sha = json.loads(resp.read().decode()).get("sha")
-            except Exception:
-                pass
-            payload = {"message": "Update DB", "content": content_encoded, "branch": GH_BRANCH}
-            if sha: payload["sha"] = sha
-            req_put = urllib.request.Request(url, data=json.dumps(payload).encode(), headers={"Authorization": f"token {GH_TOKEN}", "Accept": "application/vnd.github.v3+json", "Content-Type": "application/json", "User-Agent": "Bot"}, method="PUT")
-            urllib.request.urlopen(req_put)
-        except Exception:
-            pass
+                sha = None
+                req_get = urllib.request.Request(url, headers={"Authorization": f"token {GH_TOKEN}", "Accept": "application/vnd.github.v3+json", "User-Agent": "Bot"})
+                try:
+                    with urllib.request.urlopen(req_get) as resp:
+                        sha = json.loads(resp.read().decode()).get("sha")
+                except Exception:
+                    pass
+                    
+                payload = {"message": "Update DB", "content": content_encoded, "branch": GH_BRANCH}
+                if sha: payload["sha"] = sha
+                
+                req_put = urllib.request.Request(url, data=json.dumps(payload).encode(), headers={"Authorization": f"token {GH_TOKEN}", "Accept": "application/vnd.github.v3+json", "Content-Type": "application/json", "User-Agent": "Bot"}, method="PUT")
+                with urllib.request.urlopen(req_put) as resp:
+                    logging.info("🚀 Данные успешно отправлены и сохранены на GitHub!")
+                    break
+            except Exception as e:
+                logging.error(f"❌ Попытка {attempt+1} отправки на GitHub не удалась: {e}")
 
 def is_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS
@@ -100,7 +110,7 @@ async def cb_add(c: types.CallbackQuery):
 async def cb_skills(c: types.CallbackQuery):
     if not is_admin(c.from_user.id): return
     USER_STATES[c.from_user.id] = "WAITING_SKILL"
-    await c.message.answer("⭐ Введите имя и цифру скилла от 1 до 10 (например: Олег 5):")
+    await c.message.answer("⭐ Введите имя и цифру скилла от 1 до 10 (например: Сергей 6):\n*(Можете вводить игроков по очереди или исправлять оценки, режим не сбрасывается)*")
     await c.answer()
 
 @dp.callback_query(F.data == "add_exclude")
@@ -163,7 +173,8 @@ async def cb_teams(c: types.CallbackQuery):
     avg1 = round(sum(get_s(p) for p in t1) / len(t1), 1) if t1 else 0
     avg2 = round(sum(get_s(p) for p in t2) / len(t2), 1) if t2 else 0
     
-    text = "🔀 **Составы команд:**\n\n**Команда 1** (Ср. скилл: {avg1}):\n" + "".join(f"{i}) {p} (скилл: {get_s(p)})\n" for i, p in enumerate(t1, 1))
+    # Исправленный вывод среднего скилла для обеих команд
+    text = f"🔀 **Составы команд:**\n\n**Команда 1** (Ср. скилл: {avg1}):\n" + "".join(f"{i}) {p} (скилл: {get_s(p)})\n" for i, p in enumerate(t1, 1))
     text += f"\n**Команда 2** (Ср. скилл: {avg2}):\n" + "".join(f"{i}) {p} (скилл: {get_s(p)})\n" for i, p in enumerate(t2, 1))
     
     await c.message.answer(text, parse_mode="Markdown", reply_markup=get_keyboard())
@@ -185,12 +196,13 @@ async def text_handler(m: types.Message):
         await m.answer(f"✅ Добавлено! Всего игроков: {len(PLAYERS_POOL)}", reply_markup=get_keyboard())
     elif state == "WAITING_SKILL":
         if len(parts) >= 2 and parts[-1].isdigit() and 1 <= int(parts[-1]) <= 10:
-            PLAYER_SKILLS[" ".join(parts[:-1])] = int(parts[-1])
+            name = " ".join(parts[:-1])
+            skill = int(parts[-1])
+            PLAYER_SKILLS[name] = skill
             save_data()
-            USER_STATES.pop(m.from_user.id, None)
-            await m.answer("⭐ Сохранено!", reply_markup=get_keyboard())
+            await m.answer(f"⭐ Сохранено: {name} — {skill}! (Можете ввести следующий скилл, исправить другой или нажать кнопку в меню)", reply_markup=get_keyboard())
         else:
-            await m.answer("⚠️ Введите имя и цифру от 1 до 10 (например: Олег 5):")
+            await m.answer("⚠️ Введите имя и цифру от 1 до 10 (например: Сергей 6):")
     elif state == "WAITING_EXCLUDE":
         if len(parts) == 2:
             EXCLUDED_PAIRS.add(frozenset([parts[0], parts[1]]))
