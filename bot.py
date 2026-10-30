@@ -1,7 +1,5 @@
-import json
 import logging
 import random
-import re
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -17,30 +15,10 @@ bot = Bot(token=TOKEN)
 storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
 
-DB_FILE = "database.json"
-
-def load_data():
-    try:
-        with open(DB_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-            return (
-                set(data.get("players", [])),
-                data.get("skills", {}),
-                {frozenset(pair) for pair in data.get("exclude_pairs", [])},
-            )
-    except (FileNotFoundError, json.JSONDecodeError):
-        return set(), {}, set()
-
-def save_data():
-    data = {
-        "players": list(players_pool),
-        "skills": player_skills,
-        "exclude_pairs": [list(pair) for pair in excluded_pairs],
-    }
-    with open(DB_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=4)
-
-players_pool, player_skills, excluded_pairs = load_data()
+# Абсолютно постоянные хранилища в памяти процесса
+PLAYERS_POOL = set()
+PLAYER_SKILLS = {}
+EXCLUDED_PAIRS = set()
 
 
 class AdminStates(StatesGroup):
@@ -75,9 +53,9 @@ async def cmd_start(message: types.Message):
 
     text = (
         "⚽ **Панель управления футбольными составами**\n\n"
-        f"👥 Игроков в базе: **{len(players_pool)}**\n"
-        f"⭐ Оценок скилла: {len(player_skills)}\n"
-        f"🚫 Пар исключений: {len(excluded_pairs)}\n\n"
+        f"👥 Игроков в базе: **{len(PLAYERS_POOL)}**\n"
+        f"⭐ Оценок скилла: {len(PLAYER_SKILLS)}\n"
+        f"🚫 Пар исключений: {len(EXCLUDED_PAIRS)}\n\n"
         "Выберите действие с помощью кнопок ниже:"
     )
     await message.answer(text, reply_markup=get_admin_keyboard(), parse_mode="Markdown")
@@ -105,15 +83,15 @@ async def process_callbacks(callback: types.CallbackQuery, state: FSMContext):
     if action == "add_players":
         await state.set_state(AdminStates.waiting_for_players)
         await callback.message.answer(
-            "✍️ Отправьте список игроков (имена или юзернеймы через пробел/строку):\n\n"
+            "✍️ Отправьте список игроков (имена или юзернеймы через пробел или строчку):\n\n"
             "Пример: `Егор @Rmgild Vladimir @SereginS2`"
         )
 
     elif action == "set_skills":
         await state.set_state(AdminStates.waiting_for_skills)
         await callback.message.answer(
-            "⭐ Отправьте оценку игрока в формате:\n`Имя_или_юзернейм число` (от 1 до 10)\n\n"
-            "Пример: `Егор 9` или `@Rmgild 10`"
+            "⭐ Отправьте оценку игрока в формате:\n`Имя число` (от 1 до 10)\n\n"
+            "Пример: `Егор 9`"
         )
 
     elif action == "add_exclude":
@@ -131,26 +109,25 @@ async def process_callbacks(callback: types.CallbackQuery, state: FSMContext):
         )
 
     elif action == "clear_list":
-        players_pool.clear()
-        save_data()
+        PLAYERS_POOL.clear()
         await callback.message.answer(
             "🗑 Список игроков очищен! (Скиллы и пары исключений сохранены)."
         )
         await callback.message.answer("Главное меню:", reply_markup=get_admin_keyboard())
 
     elif action == "make_teams":
-        if len(players_pool) < 2:
+        if len(PLAYERS_POOL) < 2:
             await callback.answer(
-                f"⚠️ Недостаточно игроков для сборки (сейчас в базе: {len(players_pool)}, нужно минимум 2).",
+                f"⚠️ Недостаточно игроков для сборки (сейчас в базе: {len(PLAYERS_POOL)}, нужно минимум 2).",
                 show_alert=True,
             )
             return
 
-        players = list(players_pool)
+        players = list(PLAYERS_POOL)
         random.shuffle(players)
 
         def get_skill(p):
-            return player_skills.get(p, 5)
+            return PLAYER_SKILLS.get(p, 5)
 
         players.sort(key=get_skill, reverse=True)
 
@@ -165,10 +142,10 @@ async def process_callbacks(callback: types.CallbackQuery, state: FSMContext):
             can_go_to_2 = True
 
             for p in team1:
-                if frozenset([player, p]) in excluded_pairs:
+                if frozenset([player, p]) in EXCLUDED_PAIRS:
                     can_go_to_1 = False
             for p in team2:
-                if frozenset([player, p]) in excluded_pairs:
+                if frozenset([player, p]) in EXCLUDED_PAIRS:
                     can_go_to_2 = False
 
             if len(team1) <= len(team2) and can_go_to_1 and (sum1 <= sum2 or not can_go_to_2):
@@ -194,11 +171,11 @@ async def process_callbacks(callback: types.CallbackQuery, state: FSMContext):
         text = "🔀 **Сбалансированные составы команд:**\n\n"
         text += f"**Команда 1** (Средний скилл: {avg1}):\n"
         for p in team1:
-            text += f"• {p} (скилл: {player_skills.get(p, 5)})\n"
+            text += f"• {p} (скилл: {PLAYER_SKILLS.get(p, 5)})\n"
 
         text += f"\n**Команда 2** (Средний скилл: {avg2}):\n"
         for p in team2:
-            text += f"• {p} (скилл: {player_skills.get(p, 5)})\n"
+            text += f"• {p} (скилл: {PLAYER_SKILLS.get(p, 5)})\n"
 
         await callback.message.answer(text, parse_mode="Markdown")
         await callback.message.answer("Главное меню:", reply_markup=get_admin_keyboard())
@@ -206,36 +183,26 @@ async def process_callbacks(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-# Универсальная функция извлечения всех слов/токенов из текста
-def extract_players_list(text: str) -> set:
+def parse_tokens(text: str) -> set:
     if not text:
         return set()
-    tokens = text.split()
-    found = set()
-    for token in tokens:
-        cleaned = token.strip(",.;:!?")
-        if cleaned:
-            found.add(cleaned)
-    return found
+    return {word.strip(",.;:!?") for word in text.split() if word.strip(",.;:!?")}
 
 
 @dp.message(AdminStates.waiting_for_players)
 async def save_players(message: types.Message, state: FSMContext):
-    players = extract_players_list(message.text)
-    
-    if not players:
-        await message.answer("⚠️ Список пустой. Отправьте имена или юзернеймы игроков:")
+    tokens = parse_tokens(message.text)
+    if not tokens:
+        await message.answer("⚠️ Список пустой. Отправьте имена игроков:")
         return
 
-    for p in players:
-        players_pool.add(p)
-    
-    save_data()
+    for t in tokens:
+        PLAYERS_POOL.add(t)
 
     await state.clear()
     await message.answer(
-        f"✅ Успешно добавлено игроков: {len(players)}.\n"
-        f"👥 Всего игроков в базе: **{len(players_pool)}**",
+        f"✅ Успешно добавлено игроков: {len(tokens)}.\n"
+        f"👥 Всего игроков в базе: **{len(PLAYERS_POOL)}**",
         reply_markup=get_admin_keyboard(),
         parse_mode="Markdown",
     )
@@ -247,24 +214,23 @@ async def save_skill(message: types.Message, state: FSMContext):
         return
     parts = message.text.strip().split()
     if len(parts) < 2:
-        await message.answer("⚠️ Неверный формат. Укажите игрока и оценку от 1 до 10 через пробел, например: `Егор 8`")
+        await message.answer("⚠️ Неверный формат. Пример: `Егор 8`")
         return
 
     skill_str = parts[-1]
     if not skill_str.isdigit() or not (1 <= int(skill_str) <= 10):
-        await message.answer("⚠️ Последним элементом должна быть оценка от 1 до 10!")
+        await message.answer("⚠️ Последним словом должна быть цифра от 1 до 10!")
         return
 
     skill = int(skill_str)
     player_name = " ".join(parts[:-1])
 
-    player_skills[player_name] = skill
-    players_pool.add(player_name)
-    save_data()
+    PLAYER_SKILLS[player_name] = skill
+    PLAYERS_POOL.add(player_name)
 
     await state.clear()
     await message.answer(
-        f"⭐ Скилл игрока {player_name} установлен на **{skill}** и сохранен навсегда!",
+        f"⭐ Скилл игрока {player_name} установлен на **{skill}**!",
         reply_markup=get_admin_keyboard(),
         parse_mode="Markdown",
     )
@@ -272,18 +238,17 @@ async def save_skill(message: types.Message, state: FSMContext):
 
 @dp.message(AdminStates.waiting_for_exclude_pair)
 async def save_exclude(message: types.Message, state: FSMContext):
-    players = list(extract_players_list(message.text))
-    if len(players) < 2:
-        await message.answer("⚠️ Нужно указать ровно двух игроков через пробел. Попробуйте снова:")
+    tokens = list(parse_tokens(message.text))
+    if len(tokens) < 2:
+        await message.answer("⚠️ Укажите ровно двух игроков через пробел:")
         return
 
-    pair = frozenset([players[0], players[1]])
-    excluded_pairs.add(pair)
-    save_data()
+    pair = frozenset([tokens[0], tokens[1]])
+    EXCLUDED_PAIRS.add(pair)
 
     await state.clear()
     await message.answer(
-        f"🚫 Пара исключений добавлена: **{players[0]}** и **{players[1]}** не сыграют вместе.",
+        f"🚫 Пара исключений добавлена: **{tokens[0]}** и **{tokens[1]}** не сыграют вместе.",
         reply_markup=get_admin_keyboard(),
         parse_mode="Markdown",
     )
@@ -291,18 +256,17 @@ async def save_exclude(message: types.Message, state: FSMContext):
 
 @dp.message(AdminStates.waiting_for_remove_pair)
 async def remove_exclude(message: types.Message, state: FSMContext):
-    players = list(extract_players_list(message.text))
-    if len(players) < 2:
-        await message.answer("⚠️ Нужно указать ровно двух игроков для удаления пары:")
+    tokens = list(parse_tokens(message.text))
+    if len(tokens) < 2:
+        await message.answer("⚠️ Укажите ровно двух игроков для удаления пары:")
         return
 
-    pair = frozenset([players[0], players[1]])
-    if pair in excluded_pairs:
-        excluded_pairs.remove(pair)
-        save_data()
-        text = f"✅ Пара исключений **{players[0]}** и **{players[1]}** успешно удалена."
+    pair = frozenset([tokens[0], tokens[1]])
+    if pair in EXCLUDED_PAIRS:
+        EXCLUDED_PAIRS.remove(pair)
+        text = f"✅ Пара исключений **{tokens[0]}** и **{tokens[1]}** успешно удалена."
     else:
-        text = "⚠️ Такая пара исключений не найдена в списке."
+        text = "⚠️ Такая пара исключений не найдена."
 
     await state.clear()
     await message.answer(text, reply_markup=get_admin_keyboard(), parse_mode="Markdown")
