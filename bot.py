@@ -11,12 +11,11 @@ logging.basicConfig(level=logging.INFO)
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# Чистая база в памяти бота
+# Базы данных в памяти бота
 PLAYERS_POOL = set()
 PLAYER_SKILLS = {}
 EXCLUDED_PAIRS = set()
 WAITING_FOR_PLAYERS = set()
-WAITING_FOR_SKILL = set()  # Четкий флаг для ввода скиллов
 
 
 def is_admin(user_id: int) -> bool:
@@ -41,10 +40,7 @@ def get_admin_keyboard():
 async def cmd_start(message: types.Message):
     if not is_admin(message.from_user.id):
         return
-    
-    # Сбрасываем все старые режимы при перезапуске меню
     WAITING_FOR_PLAYERS.discard(message.from_user.id)
-    WAITING_FOR_SKILL.discard(message.from_user.id)
     
     text = (
         "⚽ **Панель управления футбольными составами**\n\n"
@@ -53,7 +49,6 @@ async def cmd_start(message: types.Message):
         f"🚫 Пар исключений: {len(EXCLUDED_PAIRS)}\n\n"
         "Выберите действие с помощью кнопок ниже:"
     )
-    # Отправляем новое сообщение с актуальным меню и кнопками
     await message.answer(text, reply_markup=get_admin_keyboard(), parse_mode="Markdown")
 
 
@@ -61,9 +56,7 @@ async def cmd_start(message: types.Message):
 async def cb_add_players(callback: types.CallbackQuery):
     if not is_admin(callback.from_user.id):
         return
-    WAITING_FOR_SKILL.discard(callback.from_user.id)
     WAITING_FOR_PLAYERS.add(callback.from_user.id)
-    
     await callback.message.answer("✍️ Отправьте список игроков на матч через пробел или с новой строки:")
     await callback.answer()
 
@@ -73,9 +66,8 @@ async def cb_skills(callback: types.CallbackQuery):
     if not is_admin(callback.from_user.id):
         return
     WAITING_FOR_PLAYERS.discard(callback.from_user.id)
-    WAITING_FOR_SKILL.add(callback.from_user.id)  # Включаем режим ожидания скилла
-    
-    await callback.message.answer("⭐ Отправьте имя и скилл в формате: `Олег 8` (число от 1 до 10)")
+    # Сценарий по твоему запросу:
+    await callback.message.answer("Для оценки скилла введите имя и цифру от 1 до 10")
     await callback.answer()
 
 
@@ -84,10 +76,9 @@ async def cb_check_skills(callback: types.CallbackQuery):
     if not is_admin(callback.from_user.id):
         return
     WAITING_FOR_PLAYERS.discard(callback.from_user.id)
-    WAITING_FOR_SKILL.discard(callback.from_user.id)
     
     if not PLAYER_SKILLS:
-        text = "⭐ Список скиллов пока пустой. Нажмите «Оценить скилл игроков»."
+        text = "⭐ Список скиллов пока пустой."
     else:
         text = "⭐ **Список всех оцененных игроков:**\n\n"
         for name, skill in sorted(PLAYER_SKILLS.items(), key=lambda x: x[1], reverse=True):
@@ -102,7 +93,6 @@ async def cb_make_teams(callback: types.CallbackQuery):
     if not is_admin(callback.from_user.id):
         return
     WAITING_FOR_PLAYERS.discard(callback.from_user.id)
-    WAITING_FOR_SKILL.discard(callback.from_user.id)
 
     if len(PLAYERS_POOL) < 2:
         await callback.answer(
@@ -115,7 +105,7 @@ async def cb_make_teams(callback: types.CallbackQuery):
     random.shuffle(players)
 
     def get_skill(p):
-        return PLAYER_SKILLS.get(p, 5)  # Если оценки нет, по умолчанию 5
+        return PLAYER_SKILLS.get(p, 5)
 
     players.sort(key=get_skill, reverse=True)
 
@@ -164,7 +154,6 @@ async def cb_clear(callback: types.CallbackQuery):
     if not is_admin(callback.from_user.id):
         return
     WAITING_FOR_PLAYERS.discard(callback.from_user.id)
-    WAITING_FOR_SKILL.discard(callback.from_user.id)
     PLAYERS_POOL.clear()
     await callback.message.answer("🗑 Список игроков на матч очищен.", reply_markup=get_admin_keyboard())
     await callback.answer()
@@ -175,7 +164,6 @@ async def cb_exclude(callback: types.CallbackQuery):
     if not is_admin(callback.from_user.id):
         return
     WAITING_FOR_PLAYERS.discard(callback.from_user.id)
-    WAITING_FOR_SKILL.discard(callback.from_user.id)
     await callback.message.answer("🚫 Отправьте двух игроков через пробел, которые не должны играть вместе.")
     await callback.answer()
 
@@ -185,7 +173,6 @@ async def cb_remove_exclude(callback: types.CallbackQuery):
     if not is_admin(callback.from_user.id):
         return
     WAITING_FOR_PLAYERS.discard(callback.from_user.id)
-    WAITING_FOR_SKILL.discard(callback.from_user.id)
     await callback.message.answer("❌ Отправьте двух игроков через пробел для удаления пары исключения.")
     await callback.answer()
 
@@ -198,6 +185,7 @@ async def handle_text(message: types.Message):
     
     user_id = message.from_user.id
     text = message.text.strip()
+    parts = text.split()
 
     # 1. Если ждем список игроков на матч
     if user_id in WAITING_FOR_PLAYERS:
@@ -214,35 +202,29 @@ async def handle_text(message: types.Message):
                 PLAYERS_POOL.add(name)
         
         WAITING_FOR_PLAYERS.discard(user_id)
-        await message.answer(f"✅ Готово! Добавлено игроков на матч: {len(PLAYERS_POOL)}", reply_markup=get_admin_keyboard())
+        await message.answer("Данные внесены", reply_markup=get_admin_keyboard())
         return
 
-    # 2. Если нажали кнопку оценки и ждем имя + скилл
-    if user_id in WAITING_FOR_SKILL:
-        parts = text.split()
-        if len(parts) >= 2 and parts[-1].isdigit() and 1 <= int(parts[-1]) <= 10:
-            skill = int(parts[-1])
-            name = " ".join(parts[:-1])
-            
-            PLAYER_SKILLS[name] = skill
-            WAITING_FOR_SKILL.discard(user_id)  # Снимаем режим ожидания
-            
-            await message.answer(f"⭐ Скилл игрока {name} сохранен как {skill}!", reply_markup=get_admin_keyboard())
-            return
-        else:
-            await message.answer("⚠️ Неверный формат. Отправьте в формате: `Имя число` (например: `Олег 8`)")
-            return
+    # 2. Если введено имя и цифра от 1 до 10 (например: "Олег 5") — срабатывает всегда!
+    if len(parts) >= 2 and parts[-1].isdigit() and 1 <= int(parts[-1]) <= 10:
+        skill = int(parts[-1])
+        name = " ".join(parts[:-1])
+        
+        PLAYER_SKILLS[name] = skill
+        
+        # Ответ строго по твоему сценарию:
+        await message.answer("Данные внесены", reply_markup=get_admin_keyboard())
+        return
 
-    # 3. Обработка пар исключений
-    parts = text.split()
+    # 3. Обработка пар исключений (ровно 2 слова)
     if len(parts) == 2:
         pair = frozenset([parts[0], parts[1]])
         if pair in EXCLUDED_PAIRS:
             EXCLUDED_PAIRS.remove(pair)
-            await message.answer(f"✅ Пара исключений {parts[0]} и {parts[1]} удалена.", reply_markup=get_admin_keyboard())
+            await message.answer("Данные внесены", reply_markup=get_admin_keyboard())
         else:
             EXCLUDED_PAIRS.add(pair)
-            await message.answer(f"🚫 Пара исключений добавлена: {parts[0]} и {parts[1]}", reply_markup=get_admin_keyboard())
+            await message.answer("Данные внесены", reply_markup=get_admin_keyboard())
         return
 
     await message.answer("⚠️ Воспользуйтесь кнопками меню. Чтобы вызвать меню заново, отправьте /admin", reply_markup=get_admin_keyboard())
