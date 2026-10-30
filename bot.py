@@ -23,6 +23,7 @@ excluded_pairs = set()
 
 
 class AdminStates(StatesGroup):
+    waiting_for_players = State()
     waiting_for_skills = State()
     waiting_for_exclude_pair = State()
     waiting_for_remove_pair = State()
@@ -34,6 +35,7 @@ def is_admin(user_id: int) -> bool:
 
 def get_admin_keyboard():
     keyboard = [
+        [InlineKeyboardButton(text="➕ Добавить игрока", callback_data="add_players")],
         [InlineKeyboardButton(text="⭐ Оценить скилл игроков", callback_data="set_skills")],
         [InlineKeyboardButton(text="🔀 Собрать состав", callback_data="make_teams")],
         [InlineKeyboardButton(text="🚫 Пары исключения", callback_data="add_exclude")],
@@ -55,44 +57,15 @@ async def cmd_start(message: types.Message):
         f"👥 Игроков в базе: **{len(players_pool)}**\n"
         f"⭐ Оценок скилла: {len(player_skills)}\n"
         f"🚫 Пар исключений: {len(excluded_pairs)}\n\n"
-        "💡 *Просто отправьте в чат список игроков через `@` в любой момент, и они автоматически добавятся в базу!*"
+        "Выберите действие с помощью кнопок ниже:"
     )
     await message.answer(text, reply_markup=get_admin_keyboard(), parse_mode="Markdown")
-
-
-# Автоматический перехват любых сообщений с @ от админа (добавление игроков на лету)
-@dp.message(F.text & ~F.text.startswith("/"))
-async def auto_add_players_or_skills(message: types.Message, state: FSMContext):
-    if not is_admin(message.from_user.id):
-        return
-
-    current_state = await state.get_state()
-    
-    # Если мы ждем скилл или пару исключений — пропускаем этот хендлер, чтобы отработали профильные
-    if current_state in [
-        AdminStates.waiting_for_skills.state,
-        AdminStates.waiting_for_exclude_pair.state,
-        AdminStates.waiting_for_remove_pair.state,
-    ]:
-        return
-
-    # Ищем все вхождения @username в тексте
-    usernames = re.findall(r"@[\w_]+", message.text)
-    if usernames:
-        for u in usernames:
-            players_pool.add(u)
-        
-        await message.answer(
-            f"✅ Добавлено/обновлено игроков из сообщения: {len(usernames)}\n"
-            f"👥 Всего игроков в базе: **{len(players_pool)}**",
-            reply_markup=get_admin_keyboard(),
-            parse_mode="Markdown",
-        )
 
 
 @dp.callback_query(
     F.data.in_(
         [
+            "add_players",
             "set_skills",
             "make_teams",
             "add_exclude",
@@ -108,7 +81,14 @@ async def process_callbacks(callback: types.CallbackQuery, state: FSMContext):
 
     action = callback.data
 
-    if action == "set_skills":
+    if action == "add_players":
+        await state.set_state(AdminStates.waiting_for_players)
+        await callback.message.answer(
+            "✍️ Отправьте списком игроков (можно выбирать через `@` из выпадающего списка):\n\n"
+            "Пример: `@user1 @user2`"
+        )
+
+    elif action == "set_skills":
         await state.set_state(AdminStates.waiting_for_skills)
         await callback.message.answer(
             "⭐ Отправьте оценку игрока в формате:\n`@username число` (от 1 до 10)\n\n"
@@ -204,19 +184,68 @@ async def process_callbacks(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+# Универсальная функция извлечения юзернеймов (и из текста, и из скрытых тегов упоминаний из выпадающего списка)
+def extract_usernames(message: types.Message) -> set:
+    found = set()
+    
+    # 1. Ищем обычные текстовые упоминания @username
+    if message.text:
+        matches = re.findall(r"@[\w_]+", message.text)
+        for m in matches:
+            found.add(m)
+            
+    # 2. Ищем скрытые сущности (когда юзер выбирается из выпадающего списка Telegram)
+    if message.entities:
+        for entity in message.entities:
+            if entity.type == "text_mention" and entity.user:
+                if entity.user.username:
+                    found.add(f"@{entity.user.username}")
+                else:
+                    # Если у пользователя нет юзернейма, берем его имя
+                    found.add(f"@{entity.user.first_name}")
+            elif entity.type == "mention" and message.text:
+                # Вырезаем кусок текста по координатам сущности
+                mention_text = message.text[entity.offset:entity.offset + entity.length]
+                found.add(mention_text)
+                
+    return found
+
+
+@dp.message(AdminStates.waiting_for_players)
+async def save_players(message: types.Message, state: FSMContext):
+    usernames = extract_usernames(message)
+    
+    if not usernames:
+        await message.answer(
+            "⚠️ Не удалось распознать игроков. Убедитесь, что используете `@` или выбираете из списка:"
+        )
+        return
+
+    for u in usernames:
+        players_pool.add(u)
+
+    await state.clear()
+    await message.answer(
+        f"✅ Успешно добавлено/обновлено игроков: {len(usernames)}.\n"
+        f"👥 Всего игроков в базе: **{len(players_pool)}**",
+        reply_markup=get_admin_keyboard(),
+        parse_mode="Markdown",
+    )
+
+
 @dp.message(AdminStates.waiting_for_skills)
 async def save_skill(message: types.Message, state: FSMContext):
-    match = re.search(r"(@[\w_]+)\s+(\d+)", message.text)
-    if not match:
-        await message.answer("⚠️ Неверный формат. Укажите через пробел, например: `@user1 8`")
+    usernames = list(extract_usernames(message))
+    match = re.search(r"\b([1-9]|10)\b", message.text)
+    
+    if not usernames or not match:
+        await message.answer(
+            "⚠️ Неверный формат. Укажите игрока через `@` и оценку от 1 до 10 через пробел, например: `@user1 8`"
+        )
         return
 
-    username = match.group(1)
-    skill = int(match.group(2))
-
-    if not (1 <= skill <= 10):
-        await message.answer("⚠️ Оценка должна быть в диапазоне от 1 до 10!")
-        return
+    username = usernames[0]
+    skill = int(match.group(0))
 
     player_skills[username] = skill
     players_pool.add(username)
@@ -231,7 +260,7 @@ async def save_skill(message: types.Message, state: FSMContext):
 
 @dp.message(AdminStates.waiting_for_exclude_pair)
 async def save_exclude(message: types.Message, state: FSMContext):
-    usernames = re.findall(r"@[\w_]+", message.text)
+    usernames = list(extract_usernames(message))
     if len(usernames) < 2:
         await message.answer("⚠️ Нужно указать ровно двух игроков через `@`. Попробуйте снова:")
         return
@@ -249,7 +278,7 @@ async def save_exclude(message: types.Message, state: FSMContext):
 
 @dp.message(AdminStates.waiting_for_remove_pair)
 async def remove_exclude(message: types.Message, state: FSMContext):
-    usernames = re.findall(r"@[\w_]+", message.text)
+    usernames = list(extract_usernames(message))
     if len(usernames) < 2:
         await message.answer("⚠️ Нужно указать ровно двух игроков через `@` для удаления пары:")
         return
