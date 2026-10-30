@@ -15,21 +15,28 @@ dp = Dispatcher()
 
 DB_FILE = "database.json"
 
+players_pool = set()
+player_skills = {}
+excluded_pairs = set()
+
 
 # Загрузка базы данных с диска
 def load_data():
+    global players_pool, player_skills, excluded_pairs
     if os.path.exists(DB_FILE):
         try:
             with open(DB_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                return (
-                    set(data.get("players", [])),
-                    data.get("skills", {}),
-                    {frozenset(pair) for pair in data.get("exclude_pairs", [])},
+                players_pool = set(data.get("players", []))
+                player_skills = data.get("skills", {})
+                excluded_pairs = {
+                    frozenset(pair) for pair in data.get("exclude_pairs", [])
+                }
+                logging.info(
+                    f"📂 Загружено из базы: игроков={len(players_pool)}, скиллов={len(player_skills)}, пар={len(excluded_pairs)}"
                 )
         except Exception as e:
-            logging.error(f"Error loading database: {e}")
-    return set(), {}, set()
+            logging.error(f"Ошибка загрузки базы: {e}")
 
 
 # Сохранение базы данных на диск
@@ -42,13 +49,14 @@ def save_data():
     try:
         with open(DB_FILE, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=4)
+        logging.info(f"💾 База сохранена. Всего игроков в пуле: {len(players_pool)}")
     except Exception as e:
-        logging.error(f"Error saving database: {e}")
+        logging.error(f"Ошибка сохранения базы: {e}")
 
 
-players_pool, player_skills, excluded_pairs = load_data()
+load_data()
 
-# Активные режимы администраторов: {admin_id: "add_players" | "set_skills" | "add_exclude" | "remove_exclude"}
+# Активные режимы администраторов: {admin_id: mode_string}
 admin_modes = {}
 
 
@@ -72,9 +80,7 @@ def get_admin_keyboard():
 @dp.message(Command("admin"))
 async def cmd_start(message: types.Message):
     if not is_admin(message.from_user.id):
-        await message.answer("⚠️ У вас нет прав администратора.")
         return
-
     admin_modes.pop(message.from_user.id, None)
     text = (
         "⚽ **Панель управления футбольными составами**\n\n"
@@ -105,6 +111,7 @@ async def process_callbacks(callback: types.CallbackQuery):
 
     user_id = callback.from_user.id
     action = callback.data
+    logging.info(f"🔘 Админ {user_id} нажал кнопку: {action}")
 
     if action == "add_players":
         admin_modes[user_id] = "add_players"
@@ -118,7 +125,7 @@ async def process_callbacks(callback: types.CallbackQuery):
         admin_modes[user_id] = "set_skills"
         await callback.message.answer(
             "⭐ **Режим оценки скилла активирован.**\n\n"
-            "Отправьте оценку игрока в формате: `Имя_или_юзернейм число` (от 1 до 10)\n"
+            "Отправьте оценку в формате: `Имя_или_юзернейм число` (от 1 до 10)\n"
             "Пример: `Егор 9` или `@Rmgild 8`"
         )
 
@@ -134,8 +141,7 @@ async def process_callbacks(callback: types.CallbackQuery):
         admin_modes[user_id] = "remove_exclude"
         await callback.message.answer(
             "❌ **Режим удаления пар исключения активирован.**\n\n"
-            "Отправьте двух игроков через пробел для удаления пары исключения:\n"
-            "Пример: `Егор Vladimir`"
+            "Отправьте двух игроков через пробел для удаления:"
         )
 
     elif action == "clear_list":
@@ -143,9 +149,9 @@ async def process_callbacks(callback: types.CallbackQuery):
         players_pool.clear()
         save_data()
         await callback.message.answer(
-            "🗑 Список игроков очищен! (Скиллы и пары исключений сохранены)."
+            "🗑 Список игроков очищен! (Скиллы и пары исключений сохранены).",
+            reply_markup=get_admin_keyboard(),
         )
-        await callback.message.answer("Главное меню:", reply_markup=get_admin_keyboard())
 
     elif action == "make_teams":
         admin_modes.pop(user_id, None)
@@ -162,7 +168,7 @@ async def process_callbacks(callback: types.CallbackQuery):
         def get_skill(p):
             return player_skills.get(p, 5)
 
-        # Жадный алгоритм балансировки по среднему арифметическому
+        # Сортируем по убыванию скилла для точной балансировки
         players.sort(key=get_skill, reverse=True)
 
         team1 = []
@@ -170,17 +176,15 @@ async def process_callbacks(callback: types.CallbackQuery):
         sum1 = 0
         sum2 = 0
 
+        # Распределение с учетом пар исключений и среднего арифметического
         for player in players:
             p_skill = get_skill(player)
-            can_go_to_1 = True
-            can_go_to_2 = True
-
-            for p in team1:
-                if frozenset([player, p]) in excluded_pairs:
-                    can_go_to_1 = False
-            for p in team2:
-                if frozenset([player, p]) in excluded_pairs:
-                    can_go_to_2 = False
+            can_go_to_1 = all(
+                frozenset([player, p]) not in excluded_pairs for p in team1
+            )
+            can_go_to_2 = all(
+                frozenset([player, p]) not in excluded_pairs for p in team2
+            )
 
             if len(team1) <= len(team2) and can_go_to_1 and (sum1 <= sum2 or not can_go_to_2):
                 team1.append(player)
@@ -202,14 +206,15 @@ async def process_callbacks(callback: types.CallbackQuery):
         avg1 = round(sum1 / len(team1), 1) if team1 else 0
         avg2 = round(sum2 / len(team2), 1) if team2 else 0
 
+        # Вывод в требуемом формате
         text = "🔀 **Сбалансированные составы команд:**\n\n"
         text += f"**Команда 1** (Средний скилл: {avg1}):\n"
         for p in team1:
-            text += f"• {p}\n"
+            text += f"{p}\n"
 
         text += f"\n**Команда 2** (Средний скилл: {avg2}):\n"
         for p in team2:
-            text += f"• {p}\n"
+            text += f"{p}\n"
 
         await callback.message.answer(text, parse_mode="Markdown")
         await callback.message.answer("Главное меню:", reply_markup=get_admin_keyboard())
@@ -224,15 +229,15 @@ async def handle_text_input(message: types.Message):
 
     user_id = message.from_user.id
     mode = admin_modes.get(user_id)
+    text = message.text.strip()
+    logging.info(f"💬 Получено сообщение от админа {user_id} в режиме '{mode}': {text}")
 
     if not mode:
         await message.answer(
-            "⚠️ Пожалуйста, выберите нужное действие с помощью кнопок меню.",
+            "⚠️ Сначала выберите нужную кнопку в меню (например, «➕ Добавить игрока»).",
             reply_markup=get_admin_keyboard(),
         )
         return
-
-    text = message.text.strip()
 
     if mode == "add_players":
         tokens = []
@@ -251,10 +256,11 @@ async def handle_text_input(message: types.Message):
 
         save_data()
         admin_modes.pop(user_id, None)
+        logging.info(f"✅ Успешно добавлено игроков. Пул сейчас: {players_pool}")
 
         added_str = ", ".join(tokens)
         await message.answer(
-            f"✅ **Игроки успешно добавлены!**\n\n"
+            f"✅ **Игроки успешно добавлены в базу!**\n\n"
             f"Добавлены: {added_str}\n"
             f"👥 **Всего игроков в базе: {len(players_pool)}**",
             reply_markup=get_admin_keyboard(),
@@ -315,14 +321,12 @@ async def handle_text_input(message: types.Message):
         if pair in excluded_pairs:
             excluded_pairs.remove(pair)
             save_data()
-            text_resp = f"✅ Пара исключений **{tokens[0]}** и **{tokens[1]}** успешно удалена."
+            resp = f"✅ Пара исключений **{tokens[0]}** и **{tokens[1]}** успешно удалена."
         else:
-            text_resp = "⚠️ Такая пара исключений не найдена."
+            resp = "⚠️ Такая пара исключений не найдена."
 
         admin_modes.pop(user_id, None)
-        await message.answer(
-            text_resp, reply_markup=get_admin_keyboard(), parse_mode="Markdown"
-        )
+        await message.answer(resp, reply_markup=get_admin_keyboard(), parse_mode="Markdown")
 
 
 if __name__ == "__main__":
