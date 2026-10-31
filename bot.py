@@ -1,7 +1,24 @@
-import base64, json, logging, os, random, urllib.request
+import base64, json, logging, os, random, urllib.request, threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
+# Мгновенно поднимаем веб-сервер для Render при старте файла, чтобы исключить любые тайм-ауты
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot is active!")
+    def log_message(self, format, *args):
+        pass
+
+def run_web_server():
+    port = int(os.getenv("PORT", 10000))
+    server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
+    server.serve_forever()
+
+threading.Thread(target=run_web_server, daemon=True).start()
 
 TOKEN = "9275964752:AAHhDAMBKHW8WxKrjUv1fKApP3Xa9Jg8GEU"
 
@@ -22,7 +39,7 @@ def load_data():
         try:
             url = f"https://api.github.com/repos/{GH_REPO}/contents/{DATA_FILE}"
             req = urllib.request.Request(url, headers={"Authorization": f"token {GH_TOKEN}", "Accept": "application/vnd.github.v3+json", "User-Agent": "Bot"})
-            with urllib.request.urlopen(req) as resp:
+            with urllib.request.urlopen(req, timeout=5) as resp:
                 res_data = json.loads(resp.read().decode())
                 data = json.loads(base64.b64decode(res_data["content"]).decode())
                 PLAYERS_POOL = set(data.get("players", []))
@@ -61,7 +78,7 @@ def save_data():
                 sha = None
                 req_get = urllib.request.Request(url, headers={"Authorization": f"token {GH_TOKEN}", "Accept": "application/vnd.github.v3+json", "User-Agent": "Bot"})
                 try:
-                    with urllib.request.urlopen(req_get) as resp:
+                    with urllib.request.urlopen(req_get, timeout=5) as resp:
                         sha = json.loads(resp.read().decode()).get("sha")
                 except Exception:
                     pass
@@ -70,7 +87,7 @@ def save_data():
                 if sha: payload["sha"] = sha
                 
                 req_put = urllib.request.Request(url, data=json.dumps(payload).encode(), headers={"Authorization": f"token {GH_TOKEN}", "Accept": "application/vnd.github.v3+json", "Content-Type": "application/json", "User-Agent": "Bot"}, method="PUT")
-                with urllib.request.urlopen(req_put) as resp:
+                with urllib.request.urlopen(req_put, timeout=5) as resp:
                     logging.info("🚀 Данные успешно отправлены и сохранены на GitHub!")
                     break
             except Exception as e:
@@ -95,7 +112,7 @@ async def cmd_start(message: types.Message):
 
 @dp.callback_query(F.data == "add_players")
 async def cb_add(c: types.CallbackQuery):
-    await c.answer() # Сразу гасим таймаут кнопки
+    await c.answer()
     USER_STATES[c.from_user.id] = "WAITING_PLAYERS"
     await c.message.answer("✍️ Отправьте список игроков (через пробел или с новой строки):")
 
