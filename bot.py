@@ -1,4 +1,5 @@
-import base64, json, logging, os, random, urllib.request
+import base64, json, logging, os, random, urllib.request, threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
@@ -15,6 +16,20 @@ GH_REPO = os.getenv("GITHUB_REPO")
 GH_BRANCH = os.getenv("GITHUB_BRANCH", "main")
 
 PLAYERS_POOL, PLAYER_SKILLS, EXCLUDED_PAIRS, USER_STATES = set(), {}, set(), {}
+
+# Мини-сервер для Render, чтобы порт был занят и деплой не отваливался
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot is active!")
+    def log_message(self, format, *args):
+        pass
+
+def run_web_server():
+    port = int(os.getenv("PORT", 10000))
+    server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
+    server.serve_forever()
 
 def load_data():
     global PLAYERS_POOL, PLAYER_SKILLS, EXCLUDED_PAIRS
@@ -211,5 +226,8 @@ async def text_handler(m: types.Message):
 
 if __name__ == "__main__":
     import asyncio
+    # Запускаем мини-сервер для Render в фоновом режиме
+    threading.Thread(target=run_web_server, daemon=True).start()
+    
     load_data()
     asyncio.run(dp.start_polling(bot))
