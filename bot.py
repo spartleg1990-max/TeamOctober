@@ -1,5 +1,4 @@
-import base64, json, logging, os, random, urllib.request, threading
-from http.server import HTTPServer, BaseHTTPRequestHandler
+import base64, json, logging, os, random, urllib.request
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
@@ -16,20 +15,6 @@ GH_REPO = os.getenv("GITHUB_REPO")
 GH_BRANCH = os.getenv("GITHUB_BRANCH", "main")
 
 PLAYERS_POOL, PLAYER_SKILLS, EXCLUDED_PAIRS, USER_STATES = set(), {}, set(), {}
-
-# Мини-сервер для Render, чтобы порт был занят и деплой не отваливался
-class HealthCheckHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"Bot is active!")
-    def log_message(self, format, *args):
-        pass
-
-def run_web_server():
-    port = int(os.getenv("PORT", 10000))
-    server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
-    server.serve_forever()
 
 def load_data():
     global PLAYERS_POOL, PLAYER_SKILLS, EXCLUDED_PAIRS
@@ -110,48 +95,49 @@ async def cmd_start(message: types.Message):
 
 @dp.callback_query(F.data == "add_players")
 async def cb_add(c: types.CallbackQuery):
+    await c.answer() # Сразу гасим таймаут кнопки
     USER_STATES[c.from_user.id] = "WAITING_PLAYERS"
     await c.message.answer("✍️ Отправьте список игроков (через пробел или с новой строки):")
-    await c.answer()
 
 @dp.callback_query(F.data == "set_skills")
 async def cb_skills(c: types.CallbackQuery):
+    await c.answer()
     USER_STATES[c.from_user.id] = "WAITING_SKILL"
     await c.message.answer("⭐ Введите имя и цифру скилла от 1 до 10 (например: Сергей 6):\n*(Можете вводить игроков по очереди или исправлять оценки, режим не сбрасывается)*")
-    await c.answer()
 
 @dp.callback_query(F.data == "add_exclude")
 async def cb_excl(c: types.CallbackQuery):
+    await c.answer()
     USER_STATES[c.from_user.id] = "WAITING_EXCLUDE"
     await c.message.answer("🚫 Отправьте двух игроков через пробел (например: Олег Макс):")
-    await c.answer()
 
 @dp.callback_query(F.data == "remove_exclude")
 async def cb_rem_excl(c: types.CallbackQuery):
+    await c.answer()
     USER_STATES[c.from_user.id] = "WAITING_REMOVE_EXCLUDE"
     await c.message.answer("❌ Отправьте двух игроков через пробел для удаления из исключений:")
-    await c.answer()
 
 @dp.callback_query(F.data == "check_skills")
 async def cb_check(c: types.CallbackQuery):
+    await c.answer()
     USER_STATES.pop(c.from_user.id, None)
     text = "⭐ Список скиллов пуст." if not PLAYER_SKILLS else "⭐ **Скиллы:**\n\n" + "".join(f"• {n} — **{s}**\n" for n, s in sorted(PLAYER_SKILLS.items(), key=lambda x: x[1], reverse=True))
     await c.message.answer(text, parse_mode="Markdown", reply_markup=get_keyboard())
-    await c.answer()
 
 @dp.callback_query(F.data == "clear_list")
 async def cb_clear(c: types.CallbackQuery):
+    await c.answer()
     USER_STATES.pop(c.from_user.id, None)
     PLAYERS_POOL.clear()
     save_data()
     await c.message.answer("🗑 Список игроков очищен.", reply_markup=get_keyboard())
-    await c.answer()
 
 @dp.callback_query(F.data == "make_teams")
 async def cb_teams(c: types.CallbackQuery):
+    await c.answer()
     USER_STATES.pop(c.from_user.id, None)
     if len(PLAYERS_POOL) < 2:
-        await c.answer(f"⚠️ Мало игроков ({len(PLAYERS_POOL)}). Нужно мин. 2", show_alert=True)
+        await c.message.answer(f"⚠️ Мало игроков ({len(PLAYERS_POOL)}). Нужно мин. 2")
         return
     
     players = list(PLAYERS_POOL)
@@ -179,7 +165,6 @@ async def cb_teams(c: types.CallbackQuery):
     text += f"\n**Команда 2** (Ср. скилл: {avg2}):\n" + "".join(f"{i}) {p} (скилл: {get_s(p)})\n" for i, p in enumerate(t2, 1))
     
     await c.message.answer(text, parse_mode="Markdown", reply_markup=get_keyboard())
-    await c.answer()
 
 @dp.message(F.text & ~F.text.startswith("/"))
 async def text_handler(m: types.Message):
@@ -226,8 +211,5 @@ async def text_handler(m: types.Message):
 
 if __name__ == "__main__":
     import asyncio
-    # Запускаем мини-сервер для Render в фоновом режиме
-    threading.Thread(target=run_web_server, daemon=True).start()
-    
     load_data()
     asyncio.run(dp.start_polling(bot))
