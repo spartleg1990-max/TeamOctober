@@ -4,7 +4,6 @@ from aiogram.filters import Command
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 TOKEN = "9275964752:AAHhDAMBKHW8WxKrjUv1fKApP3Xa9Jg8GEU"
-ADMIN_IDS = {107742498, 92769858}
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=TOKEN)
@@ -57,7 +56,6 @@ def save_data():
         url = f"https://api.github.com/repos/{GH_REPO}/contents/{DATA_FILE}"
         content_encoded = base64.b64encode(json_str.encode()).decode()
         
-        # Делаем попытку с авто-обновлением sha на случай конфликтов при быстрой правке
         for attempt in range(2):
             try:
                 sha = None
@@ -78,9 +76,6 @@ def save_data():
             except Exception as e:
                 logging.error(f"❌ Попытка {attempt+1} отправки на GitHub не удалась: {e}")
 
-def is_admin(user_id: int) -> bool:
-    return user_id in ADMIN_IDS
-
 def get_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="➕ Добавить игроков", callback_data="add_players")],
@@ -94,42 +89,36 @@ def get_keyboard():
 
 @dp.message(Command("start"), Command("admin"))
 async def cmd_start(message: types.Message):
-    if not is_admin(message.from_user.id): return
     USER_STATES.pop(message.from_user.id, None)
     text = f"⚽ **Панель управления**\n\n👥 Игроков: **{len(PLAYERS_POOL)}**\n⭐ Скиллов: **{len(PLAYER_SKILLS)}**\n🚫 Исключений: {len(EXCLUDED_PAIRS)}"
     await message.answer(text, reply_markup=get_keyboard(), parse_mode="Markdown")
 
 @dp.callback_query(F.data == "add_players")
 async def cb_add(c: types.CallbackQuery):
-    if not is_admin(c.from_user.id): return
     USER_STATES[c.from_user.id] = "WAITING_PLAYERS"
     await c.message.answer("✍️ Отправьте список игроков (через пробел или с новой строки):")
     await c.answer()
 
 @dp.callback_query(F.data == "set_skills")
 async def cb_skills(c: types.CallbackQuery):
-    if not is_admin(c.from_user.id): return
     USER_STATES[c.from_user.id] = "WAITING_SKILL"
     await c.message.answer("⭐ Введите имя и цифру скилла от 1 до 10 (например: Сергей 6):\n*(Можете вводить игроков по очереди или исправлять оценки, режим не сбрасывается)*")
     await c.answer()
 
 @dp.callback_query(F.data == "add_exclude")
 async def cb_excl(c: types.CallbackQuery):
-    if not is_admin(c.from_user.id): return
     USER_STATES[c.from_user.id] = "WAITING_EXCLUDE"
     await c.message.answer("🚫 Отправьте двух игроков через пробел (например: Олег Макс):")
     await c.answer()
 
 @dp.callback_query(F.data == "remove_exclude")
 async def cb_rem_excl(c: types.CallbackQuery):
-    if not is_admin(c.from_user.id): return
     USER_STATES[c.from_user.id] = "WAITING_REMOVE_EXCLUDE"
     await c.message.answer("❌ Отправьте двух игроков через пробел для удаления из исключений:")
     await c.answer()
 
 @dp.callback_query(F.data == "check_skills")
 async def cb_check(c: types.CallbackQuery):
-    if not is_admin(c.from_user.id): return
     USER_STATES.pop(c.from_user.id, None)
     text = "⭐ Список скиллов пуст." if not PLAYER_SKILLS else "⭐ **Скиллы:**\n\n" + "".join(f"• {n} — **{s}**\n" for n, s in sorted(PLAYER_SKILLS.items(), key=lambda x: x[1], reverse=True))
     await c.message.answer(text, parse_mode="Markdown", reply_markup=get_keyboard())
@@ -137,7 +126,6 @@ async def cb_check(c: types.CallbackQuery):
 
 @dp.callback_query(F.data == "clear_list")
 async def cb_clear(c: types.CallbackQuery):
-    if not is_admin(c.from_user.id): return
     USER_STATES.pop(c.from_user.id, None)
     PLAYERS_POOL.clear()
     save_data()
@@ -146,7 +134,6 @@ async def cb_clear(c: types.CallbackQuery):
 
 @dp.callback_query(F.data == "make_teams")
 async def cb_teams(c: types.CallbackQuery):
-    if not is_admin(c.from_user.id): return
     USER_STATES.pop(c.from_user.id, None)
     if len(PLAYERS_POOL) < 2:
         await c.answer(f"⚠️ Мало игроков ({len(PLAYERS_POOL)}). Нужно мин. 2", show_alert=True)
@@ -173,7 +160,6 @@ async def cb_teams(c: types.CallbackQuery):
     avg1 = round(sum(get_s(p) for p in t1) / len(t1), 1) if t1 else 0
     avg2 = round(sum(get_s(p) for p in t2) / len(t2), 1) if t2 else 0
     
-    # Исправленный вывод среднего скилла для обеих команд
     text = f"🔀 **Составы команд:**\n\n**Команда 1** (Ср. скилл: {avg1}):\n" + "".join(f"{i}) {p} (скилл: {get_s(p)})\n" for i, p in enumerate(t1, 1))
     text += f"\n**Команда 2** (Ср. скилл: {avg2}):\n" + "".join(f"{i}) {p} (скилл: {get_s(p)})\n" for i, p in enumerate(t2, 1))
     
@@ -182,7 +168,6 @@ async def cb_teams(c: types.CallbackQuery):
 
 @dp.message(F.text & ~F.text.startswith("/"))
 async def text_handler(m: types.Message):
-    if not is_admin(m.from_user.id): return
     state = USER_STATES.get(m.from_user.id)
     if not state: return
     text, parts = m.text.strip(), m.text.strip().split()
