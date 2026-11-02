@@ -98,9 +98,11 @@ def get_keyboard():
         [InlineKeyboardButton(text="➕ Добавить игроков", callback_data="add_players")],
         [InlineKeyboardButton(text="⭐ Оценить скилл игроков", callback_data="set_skills")],
         [InlineKeyboardButton(text="📋 Проверить скиллы", callback_data="check_skills")],
+        [InlineKeyboardButton(text="🗑 Очистить скиллы", callback_data="clear_skills_menu")],
+        [InlineKeyboardButton(text="📋 Проверить пары исключения", callback_data="check_excludes")],
         [InlineKeyboardButton(text="🔀 Собрать команду", callback_data="make_teams")],
-        [InlineKeyboardButton(text="🚫 Пары исключения", callback_data="add_exclude")],
-        [InlineKeyboardButton(text="❌ Удалить пары исключения", callback_data="remove_exclude")],
+        [InlineKeyboardButton(text="🚫 Добавить пару исключения", callback_data="add_exclude")],
+        [InlineKeyboardButton(text="❌ Удалить пару исключения", callback_data="remove_exclude")],
         [InlineKeyboardButton(text="🗑 Очистить список игроков", callback_data="clear_list")]
     ])
 
@@ -120,7 +122,31 @@ async def cb_add(c: types.CallbackQuery):
 async def cb_skills(c: types.CallbackQuery):
     await c.answer()
     USER_STATES[c.from_user.id] = "WAITING_SKILL"
-    await c.message.answer("⭐ Введите имя и цифру скилла от 1 до 10 (например: Сергей 6):\n*(Можете вводить игроков по очереди или исправлять оценки, режим не сбрасывается)*")
+    await c.message.answer("⭐ Введите имя и цифру скилла от 1 до 10 (можно отправлять списком):\n*(Пример: Олег 4)*")
+
+@dp.callback_query(F.data == "clear_skills_menu")
+async def cb_clear_skills_menu(c: types.CallbackQuery):
+    await c.answer()
+    USER_STATES[c.from_user.id] = "WAITING_CLEAR_SKILL"
+    confirm_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⚠️ Да, удалить ВСЕ скиллы", callback_data="confirm_clear_all")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_action")]
+    ])
+    await c.message.answer("🗑 Напишите имя конкретного игрока, которого нужно удалить.\n\nИли нажмите кнопку ниже для полной очистки списка скиллов:", reply_markup=confirm_kb)
+
+@dp.callback_query(F.data == "confirm_clear_all")
+async def cb_confirm_clear_all(c: types.CallbackQuery):
+    await c.answer("Список скиллов очищен!")
+    PLAYER_SKILLS.clear()
+    save_data()
+    USER_STATES.clear()
+    await c.message.answer("🗑 Список скиллов полностью очищен.", reply_markup=get_keyboard())
+
+@dp.callback_query(F.data == "cancel_action")
+async def cb_cancel_action(c: types.CallbackQuery):
+    await c.answer("Отменено")
+    USER_STATES.clear()
+    await c.message.answer("❌ Действие отменено.", reply_markup=get_keyboard())
 
 @dp.callback_query(F.data == "add_exclude")
 async def cb_excl(c: types.CallbackQuery):
@@ -138,7 +164,25 @@ async def cb_rem_excl(c: types.CallbackQuery):
 async def cb_check(c: types.CallbackQuery):
     await c.answer()
     USER_STATES.pop(c.from_user.id, None)
-    text = "⭐ Список скиллов пуст." if not PLAYER_SKILLS else "⭐ **Скиллы:**\n\n" + "".join(f"• {n} — **{s}**\n" for n, s in sorted(PLAYER_SKILLS.items(), key=lambda x: x[1], reverse=True))
+    if not PLAYER_SKILLS:
+        text = "⭐ Список скиллов пуст."
+    else:
+        text = "⭐ **Список скиллов игроков:**\n\n"
+        for i, (n, s) in enumerate(sorted(PLAYER_SKILLS.items(), key=lambda x: x[1], reverse=True), 1):
+            text += f"{i}. {n} — **{s}**\n"
+    await c.message.answer(text, parse_mode="Markdown", reply_markup=get_keyboard())
+
+@dp.callback_query(F.data == "check_excludes")
+async def cb_check_excludes(c: types.CallbackQuery):
+    await c.answer()
+    USER_STATES.pop(c.from_user.id, None)
+    if not EXCLUDED_PAIRS:
+        text = "🚫 Список пар исключений пуст."
+    else:
+        text = "🚫 **Пары исключений:**\n\n"
+        for i, pair in enumerate(EXCLUDED_PAIRS, 1):
+            p_list = list(pair)
+            text += f"{i}. {p_list[0]} ❌ {p_list[1]}\n"
     await c.message.answer(text, parse_mode="Markdown", reply_markup=get_keyboard())
 
 @dp.callback_query(F.data == "clear_list")
@@ -187,31 +231,75 @@ async def cb_teams(c: types.CallbackQuery):
 async def text_handler(m: types.Message):
     state = USER_STATES.get(m.from_user.id)
     if not state: return
-    text, parts = m.text.strip(), m.text.strip().split()
+    text = m.text.strip()
     
-    # Обитатели чата могут писать любые цифры и слова — бот их полностью игнорирует, 
-    # пока ввод не совпадет с точным форматом команды. Никакого спама в чат!
     if state == "WAITING_PLAYERS":
+        USER_STATES.pop(m.from_user.id, None)
         names = [w.strip(",.;:!?") for line in text.split("\n") for w in line.split() if w.strip(",.;:!?")]
         if names:
             PLAYERS_POOL.update(names)
             save_data()
-            USER_STATES.pop(m.from_user.id, None)
             await m.answer(f"✅ Добавлено! Всего игроков: {len(PLAYERS_POOL)}", reply_markup=get_keyboard())
+            
     elif state == "WAITING_SKILL":
-        if len(parts) >= 2 and parts[-1].isdigit() and 1 <= int(parts[-1]) <= 10:
-            name = " ".join(parts[:-1])
-            skill = int(parts[-1])
-            PLAYER_SKILLS[name] = skill
+        USER_STATES.pop(m.from_user.id, None)
+        lines = text.split("\n")
+        results = []
+        changes_made = False
+        
+        for line in lines:
+            parts = line.strip().split()
+            if len(parts) >= 2 and parts[-1].isdigit() and 1 <= int(parts[-1]) <= 10:
+                name = " ".join(parts[:-1])
+                skill = int(parts[-1])
+                PLAYERS_POOL.add(name)
+                
+                if name in PLAYER_SKILLS:
+                    old_skill = PLAYER_SKILLS[name]
+                    if old_skill == skill:
+                        results.append(f"• **{name}** уже внесен ранее с таким же скиллом (**{skill}**)")
+                    else:
+                        PLAYER_SKILLS[name] = skill
+                        results.append(f"• **{name}**: скилл заменен с {old_skill} на **{skill}** 🔄")
+                        changes_made = True
+                else:
+                    PLAYER_SKILLS[name] = skill
+                    results.append(f"• **{name}** — **{skill}** ✅")
+                    changes_made = True
+                    
+        if results:
+            if changes_made or any("заменен" in r or "✅" in r for r in results):
+                save_data()
+            response_text = "⭐ **Результат обработки скиллов:**\n\n" + "\n".join(results) + "\n\n*(Можете ввести следующие данные или выбрать пункт в меню)*"
+            await m.answer(response_text, parse_mode="Markdown", reply_markup=get_keyboard())
+
+    elif state == "WAITING_CLEAR_SKILL":
+        USER_STATES.pop(m.from_user.id, None)
+        found_key = None
+        for name in PLAYER_SKILLS:
+            if name.lower() == text.lower():
+                found_key = name
+                break
+        if found_key:
+            del PLAYER_SKILLS[found_key]
             save_data()
-            await m.answer(f"⭐ Сохранено: {name} — {skill}! (Можете ввести следующий скилл, исправить другой или нажать кнопку в меню)", reply_markup=get_keyboard())
+            await m.answer(f"✅ Игрок **{found_key}** удален из списка скиллов.", parse_mode="Markdown", reply_markup=get_keyboard())
+        else:
+            await m.answer(f"⚠️ Игрок **{text}** не найден в списке скиллов.", parse_mode="Markdown", reply_markup=get_keyboard())
+            
     elif state == "WAITING_EXCLUDE":
+        USER_STATES.pop(m.from_user.id, None)
+        parts = text.split()
         if len(parts) == 2:
             EXCLUDED_PAIRS.add(frozenset([parts[0], parts[1]]))
             save_data()
-            USER_STATES.pop(m.from_user.id, None)
             await m.answer("🚫 Пара исключения добавлена!", reply_markup=get_keyboard())
+        else:
+            await m.answer("⚠️ Введите ровно два имени через пробел:")
+            
     elif state == "WAITING_REMOVE_EXCLUDE":
+        USER_STATES.pop(m.from_user.id, None)
+        parts = text.split()
         if len(parts) == 2:
             pair = frozenset([parts[0], parts[1]])
             if pair in EXCLUDED_PAIRS:
@@ -220,7 +308,8 @@ async def text_handler(m: types.Message):
                 await m.answer("✅ Пара удалена!", reply_markup=get_keyboard())
             else:
                 await m.answer("⚠️ Такая пара не найдена.")
-            USER_STATES.pop(m.from_user.id, None)
+        else:
+            await m.answer("⚠️ Введите ровно два имени через пробел:")
 
 if __name__ == "__main__":
     import asyncio
