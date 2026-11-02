@@ -20,7 +20,7 @@ def run_web_server():
 
 threading.Thread(target=run_web_server, daemon=True).start()
 
-TOKEN = "9275964752:AAHhDAMBKHW8WxKrjUv1fKApP3Xa9Jg8GEU"
+TOKEN = "9275964752:AAGRd-l1_GJNF-4eJcSj1DebU4NTF8fgS-I"
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=TOKEN)
@@ -313,7 +313,7 @@ async def text_handler(m: types.Message):
 
 async def main():
     load_data()
-    # Принудительно сбрасываем старый вебхук, чтобы личные сообщения и поллинг заработали на 100%
+    # Очищаем возможные зависшие обновления, чтобы личка и группы работали синхронно
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
