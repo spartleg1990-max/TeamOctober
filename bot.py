@@ -24,8 +24,8 @@ def run_web_server():
 import threading
 threading.Thread(target=run_web_server, daemon=True).start()
 
-# Новый токен, выданный через BotFather
-TOKEN = "9275964752:AAGRd-l1_GJNF-4eJcSj1DebU4NTF8fgS-I"
+# Новый актуальный токен
+TOKEN = "9275964752:AAHxFkzHiwhHWr6rjhizsaxKhHKG2HBBaf8"
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
@@ -260,7 +260,7 @@ async def text_handler(m: types.Message):
                 if name in PLAYER_SKILLS:
                     old_skill = PLAYER_SKILLS[name]
                     if old_skill == skill:
-                        results.append(f"• **{name}** уже внесен ранее с таким же скиллом (**{skill}**)")
+                        results.append(f"• **{name}** уже внесен ранее с тем же скиллом (**{skill}**)")
                     else:
                         PLAYER_SKILLS[name] = skill
                         results.append(f"• **{name}**: скилл заменен с {old_skill} на **{skill}** 🔄")
@@ -316,7 +316,6 @@ async def text_handler(m: types.Message):
 
 async def main():
     load_data()
-    # Полностью сбрасываем любые зависшие потоки обновлений Telegram
     await bot.delete_webhook(drop_pending_updates=True)
     logging.info("🤖 Бот запущен и готов к работе!")
     await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
