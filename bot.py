@@ -4,7 +4,7 @@ from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-# Мгновенно поднимаем веб-сервер для Render при старте файла, чтобы исключить любые тайм-ауты
+# Мгновенно поднимаем веб-сервер для Render при старте файла
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -189,13 +189,15 @@ async def text_handler(m: types.Message):
     if not state: return
     text, parts = m.text.strip(), m.text.strip().split()
     
+    # Обитатели чата могут писать любые цифры и слова — бот их полностью игнорирует, 
+    # пока ввод не совпадет с точным форматом команды. Никакого спама в чат!
     if state == "WAITING_PLAYERS":
         names = [w.strip(",.;:!?") for line in text.split("\n") for w in line.split() if w.strip(",.;:!?")]
         if names:
             PLAYERS_POOL.update(names)
             save_data()
-        USER_STATES.pop(m.from_user.id, None)
-        await m.answer(f"✅ Добавлено! Всего игроков: {len(PLAYERS_POOL)}", reply_markup=get_keyboard())
+            USER_STATES.pop(m.from_user.id, None)
+            await m.answer(f"✅ Добавлено! Всего игроков: {len(PLAYERS_POOL)}", reply_markup=get_keyboard())
     elif state == "WAITING_SKILL":
         if len(parts) >= 2 and parts[-1].isdigit() and 1 <= int(parts[-1]) <= 10:
             name = " ".join(parts[:-1])
@@ -203,16 +205,12 @@ async def text_handler(m: types.Message):
             PLAYER_SKILLS[name] = skill
             save_data()
             await m.answer(f"⭐ Сохранено: {name} — {skill}! (Можете ввести следующий скилл, исправить другой или нажать кнопку в меню)", reply_markup=get_keyboard())
-        else:
-            await m.answer("⚠️ Введите имя и цифру от 1 до 10 (например: Сергей 6):")
     elif state == "WAITING_EXCLUDE":
         if len(parts) == 2:
             EXCLUDED_PAIRS.add(frozenset([parts[0], parts[1]]))
             save_data()
             USER_STATES.pop(m.from_user.id, None)
             await m.answer("🚫 Пара исключения добавлена!", reply_markup=get_keyboard())
-        else:
-            await m.answer("⚠️ Введите ровно два имени через пробел:")
     elif state == "WAITING_REMOVE_EXCLUDE":
         if len(parts) == 2:
             pair = frozenset([parts[0], parts[1]])
@@ -223,8 +221,6 @@ async def text_handler(m: types.Message):
             else:
                 await m.answer("⚠️ Такая пара не найдена.")
             USER_STATES.pop(m.from_user.id, None)
-        else:
-            await m.answer("⚠️ Введите ровно два имени через пробел:")
 
 if __name__ == "__main__":
     import asyncio
