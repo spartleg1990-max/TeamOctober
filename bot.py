@@ -1,10 +1,13 @@
-import base64, json, logging, os, random, urllib.request, threading
+import base64, json, logging, os, random, urllib.request, asyncio
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-# Мгновенно поднимаем веб-сервер для Render при старте файла
+# Настройка логирования
+logging.basicConfig(level=logging.INFO)
+
+# Легковесный веб-сервер для удержания порта Render
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -18,11 +21,11 @@ def run_web_server():
     server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
     server.serve_forever()
 
+import threading
 threading.Thread(target=run_web_server, daemon=True).start()
 
+# Новый токен, выданный через BotFather
 TOKEN = "9275964752:AAGRd-l1_GJNF-4eJcSj1DebU4NTF8fgS-I"
-
-logging.basicConfig(level=logging.INFO)
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
@@ -313,10 +316,10 @@ async def text_handler(m: types.Message):
 
 async def main():
     load_data()
-    # Очищаем возможные зависшие обновления, чтобы личка и группы работали синхронно
+    # Полностью сбрасываем любые зависшие потоки обновлений Telegram
     await bot.delete_webhook(drop_pending_updates=True)
-    await dp.start_polling(bot)
+    logging.info("🤖 Бот запущен и готов к работе!")
+    await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
 
 if __name__ == "__main__":
-    import asyncio
     asyncio.run(main())
