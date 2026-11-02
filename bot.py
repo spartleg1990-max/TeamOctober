@@ -311,7 +311,12 @@ async def text_handler(m: types.Message):
         else:
             await m.answer("⚠️ Введите ровно два имени через пробел:")
 
+async def main():
+    load_data()
+    # Принудительно сбрасываем старый вебхук, чтобы личные сообщения и поллинг заработали на 100%
+    await bot.delete_webhook(drop_pending_updates=True)
+    await dp.start_polling(bot)
+
 if __name__ == "__main__":
     import asyncio
-    load_data()
-    asyncio.run(dp.start_polling(bot))
+    asyncio.run(main())
